@@ -81,6 +81,38 @@ def _format_pnl(value: Any) -> str:
     return f"{prefix}{amount:.2f}"
 
 
+def _performance_summary(closed_positions: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(closed_positions)
+    if total == 0:
+        return {
+            "closed_count": 0,
+            "win_rate": 0.0,
+            "average_pnl": 0.0,
+            "best_pnl": 0.0,
+            "worst_pnl": 0.0,
+            "close_reasons": {},
+        }
+
+    pnls = [_to_float(row.get("pnl", 0.0)) for row in closed_positions]
+    wins = sum(1 for pnl in pnls if pnl > 0)
+    reason_counts: dict[str, int] = {}
+    for row in closed_positions:
+        raw_reason = row.get("close_reason") or row.get("status") or "unknown"
+        if row.get("winning_side"):
+            raw_reason = f"settled {row.get('winning_side')}"
+        label = _format_status(str(raw_reason))
+        reason_counts[label] = reason_counts.get(label, 0) + 1
+
+    return {
+        "closed_count": total,
+        "win_rate": wins / total,
+        "average_pnl": sum(pnls) / total,
+        "best_pnl": max(pnls),
+        "worst_pnl": min(pnls),
+        "close_reasons": reason_counts,
+    }
+
+
 def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
     data_dir = root / cfg["telemetry"]["data_dir"]
     signals = _load_csv_rows(data_dir / "signals.csv")
@@ -100,6 +132,8 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
     state.setdefault("closed_positions", [])
 
     recommendation_counts: dict[str, int] = {}
+    closed_positions = state.get("closed_positions", [])
+    performance = _performance_summary(closed_positions)
     for row in signals:
         recommendation = row.get("recommendation", "UNKNOWN") or "UNKNOWN"
         recommendation_counts[recommendation] = recommendation_counts.get(recommendation, 0) + 1
@@ -142,7 +176,7 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
         )
 
     recent_settlements = []
-    for closed in reversed(state.get("closed_positions", [])[-10:]):
+    for closed in reversed(closed_positions[-10:]):
         market_id = closed.get("market_id", "")
         market_label = (
             closed.get("question")
@@ -199,12 +233,14 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
         "counts": {
             "signals": len(signals),
             "orders": len(orders),
-            "closed_positions": len(state.get("closed_positions", [])),
+            "closed_positions": len(closed_positions),
             "recommendations": recommendation_counts,
         },
         "charts": {
             "recent_signals": recent_signal_chart,
+            "close_reasons": performance["close_reasons"],
         },
+        "performance": performance,
         "latest_signal": signals[-1] if signals else None,
         "latest_order": latest_order,
         "recent_signals": list(reversed(signals[-10:])),
@@ -301,6 +337,26 @@ def _render_signal_chart(points: list[dict[str, Any]]) -> str:
     return f'<div class="signal-chart-rows">{ "".join(rows) }</div><div class="chart-caption">Each row shows the market, recommendation, confidence, and edge across the latest {len(points)} signals.</div>'
 
 
+def _render_performance_chart(reasons: dict[str, int]) -> str:
+    if not reasons:
+        return '<div class="empty">No closed trades yet.</div>'
+
+    total = sum(reasons.values()) or 1
+    rows = []
+    for name, count in sorted(reasons.items(), key=lambda item: (-item[1], item[0])):
+        width = max(8, round((count / total) * 100))
+        rows.append(
+            f"""
+            <div class="chart-row">
+              <div class="chart-label">{html.escape(name)}</div>
+              <div class="bar-track"><div class="bar-fill" style="width:{width}%"></div></div>
+              <div class="chart-value">{count}</div>
+            </div>
+            """
+        )
+    return "".join(rows)
+
+
 def _render_discord_panel(discord: dict[str, Any]) -> str:
     commands = discord.get("commands", [])
     buttons = []
@@ -329,6 +385,7 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
     status = summary["status"]
     latest_signal = summary["latest_signal"] or {}
     latest_order = summary["latest_order"] or {}
+    performance = summary["performance"]
     paused_tone = "danger" if status["paused"] else "success"
     paused_text = "Paused" if status["paused"] else "Running"
     recommendation_counts = summary["counts"]["recommendations"]
@@ -743,8 +800,25 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
         </section>
 
         <section class="panel">
+          <h2>Performance snapshot</h2>
+          <div class="kpis">
+            {_card("Win rate", f"{performance['win_rate'] * 100:.0f}%")}
+            {_card("Avg PnL", _format_pnl(performance["average_pnl"]))}
+            {_card("Best / Worst", f"{_format_pnl(performance['best_pnl'])} / {_format_pnl(performance['worst_pnl'])}")}
+          </div>
+          <div class="meta" style="margin-top: 14px;">
+            <div>Closed trades: {performance['closed_count']}</div>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2>Recommendation mix</h2>
           {_render_recommendation_chart(recommendation_counts)}
+        </section>
+
+        <section class="panel">
+          <h2>Close reasons</h2>
+          {_render_performance_chart(summary["charts"]["close_reasons"])}
         </section>
 
         <section class="panel">

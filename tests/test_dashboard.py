@@ -77,6 +77,8 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
     assert summary["latest_signal"]["market_id"] == "m1"
     assert summary["recent_settlements"][0]["market"] == "Missouri St. at Texas Winner?"
     assert summary["recent_settlements"][0]["reason"] == "Settled Yes"
+    assert summary["performance"]["closed_count"] == 1
+    assert summary["performance"]["win_rate"] == 1.0
 
 
 def test_dashboard_html_contains_heading():
@@ -93,13 +95,21 @@ def test_dashboard_html_contains_heading():
                 "latest_cron_line": "",
             },
             "counts": {"signals": 0, "orders": 0, "closed_positions": 0, "recommendations": {}},
-            "charts": {"recent_signals": []},
+            "charts": {"recent_signals": [], "close_reasons": {}},
             "latest_signal": None,
             "latest_order": None,
             "recent_signals": [],
             "recent_orders": [],
             "open_positions": [],
             "recent_settlements": [],
+            "performance": {
+                "closed_count": 0,
+                "win_rate": 0.0,
+                "average_pnl": 0.0,
+                "best_pnl": 0.0,
+                "worst_pnl": 0.0,
+                "close_reasons": {},
+            },
             "discord": {"channel_url": "", "commands": ["prediction bot report"]},
         }
     )
@@ -108,3 +118,4 @@ def test_dashboard_html_contains_heading():
     assert "Discord workflow" in html
     assert "/action/scan" in html
     assert "Recent closes" in html
+    assert "Performance snapshot" in html

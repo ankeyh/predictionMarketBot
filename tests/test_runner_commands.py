@@ -70,3 +70,5 @@ telemetry:
     report = capsys.readouterr().out
     assert "Prediction Bot Report" in report
     assert "Signals logged:" in report
+    assert "Closed trades:" in report
+    assert "Win rate:" in report

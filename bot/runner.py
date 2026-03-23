@@ -208,6 +208,30 @@ def _load_json_rows(path: Path) -> list[dict]:
         return rows
 
 
+def _report_performance(root: Path, cfg: dict) -> dict:
+    data_dir = root / cfg["telemetry"]["data_dir"]
+    state = PaperBroker(cfg, data_dir).state
+    closed_positions = state.get("closed_positions", [])
+    total = len(closed_positions)
+    if total == 0:
+        return {
+            "closed_count": 0,
+            "win_rate": 0.0,
+            "average_pnl": 0.0,
+            "best_pnl": 0.0,
+            "worst_pnl": 0.0,
+        }
+    pnls = [float(row.get("pnl", 0.0) or 0.0) for row in closed_positions]
+    wins = sum(1 for pnl in pnls if pnl > 0)
+    return {
+        "closed_count": total,
+        "win_rate": wins / total,
+        "average_pnl": sum(pnls) / total,
+        "best_pnl": max(pnls),
+        "worst_pnl": min(pnls),
+    }
+
+
 def command_status(root: Path, cfg: dict) -> None:
     print(format_status(root, cfg))
 
@@ -234,6 +258,7 @@ def format_report(root: Path, cfg: dict) -> str:
     data_dir = root / cfg["telemetry"]["data_dir"]
     signals = _load_json_rows(data_dir / "signals.csv")
     orders = _load_json_rows(data_dir / "orders.csv")
+    performance = _report_performance(root, cfg)
     report = {
         "signal_count": len(signals),
         "order_count": len(orders),
@@ -247,6 +272,9 @@ def format_report(root: Path, cfg: dict) -> str:
         "Prediction Bot Report",
         f"Signals logged: {report['signal_count']}",
         f"Orders logged: {report['order_count']}",
+        f"Closed trades: {performance['closed_count']}",
+        f"Win rate: {performance['win_rate'] * 100:.0f}%",
+        f"Average PnL: {performance['average_pnl']:.2f}",
     ]
     if latest_signal:
         lines.extend(
