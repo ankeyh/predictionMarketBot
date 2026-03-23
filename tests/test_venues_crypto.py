@@ -5,6 +5,7 @@ def test_infer_reference_symbol_for_crypto_questions():
     assert PolymarketVenue._infer_reference_symbol("Will Bitcoin hit $100,000 by Friday?") == "BTCUSD"
     assert PolymarketVenue._infer_reference_symbol("Will Ethereum trade above $5,000 in April?") == "ETHUSD"
     assert PolymarketVenue._infer_reference_symbol("Will Solana close above $250 this month?") == "SOLUSD"
+    assert PolymarketVenue._infer_reference_symbol("Will XRP trade above $5 this year?") == "XRPUSD"
 
 
 def test_crypto_contract_context_parses_range():
@@ -56,3 +57,10 @@ def test_quality_score_prefers_nearer_cleaner_market():
     near_score = PolymarketVenue._quality_score("crypto_price", 0.48, 0.52, 9000.0, 5.0)
     far_score = PolymarketVenue._quality_score("crypto_event", 0.03, 0.97, 100.0, 120.0)
     assert near_score > far_score
+
+
+def test_infer_market_type_from_text_for_altcoin_price():
+    market_type = PolymarketVenue._infer_market_type_from_text(
+        "will xrp price trade above $5 by december"
+    )
+    assert market_type == "crypto_price"

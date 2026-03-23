@@ -58,11 +58,27 @@ venue:
     - eth
     - solana
     - sol
+    - xrp
+    - ripple
+    - doge
+    - dogecoin
+    - cardano
+    - ada
+    - avalanche
+    - avax
+    - sui
     - crypto
     - token
     - airdrop
     - fdv
     - market cap
+    - etf
+    - staking
+    - restaking
+    - launch
+    - mainnet
+    - unlock
+    - listing
   max_days_to_close: 30
   max_markets: 8
   max_markets_per_theme: 1

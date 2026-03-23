@@ -17,6 +17,11 @@ CRYPTO_REFERENCE_MAP = {
     "BTCUSD": "BTC-USD",
     "ETHUSD": "ETH-USD",
     "SOLUSD": "SOL-USD",
+    "XRPUSD": "XRP-USD",
+    "DOGEUSD": "DOGE-USD",
+    "ADAUSD": "ADA-USD",
+    "AVAXUSD": "AVAX-USD",
+    "SUIUSD": "SUI-USD",
 }
 CRYPTO_TERMS = [
     "bitcoin",
@@ -51,6 +56,18 @@ CRYPTO_TERMS = [
     "avalanche",
     "avax",
     "sui",
+    "etf",
+    "staking",
+    "restaking",
+    "launch",
+    "mainnet",
+    "testnet",
+    "unlock",
+    "listing",
+    "bridge",
+    "rollup",
+    "layer 2",
+    "l2",
 ]
 CRYPTO_KEYWORD_SYMBOLS = {
     "bitcoin": "BTCUSD",
@@ -59,6 +76,15 @@ CRYPTO_KEYWORD_SYMBOLS = {
     "eth": "ETHUSD",
     "solana": "SOLUSD",
     "sol": "SOLUSD",
+    "xrp": "XRPUSD",
+    "ripple": "XRPUSD",
+    "doge": "DOGEUSD",
+    "dogecoin": "DOGEUSD",
+    "cardano": "ADAUSD",
+    "ada": "ADAUSD",
+    "avalanche": "AVAXUSD",
+    "avax": "AVAXUSD",
+    "sui": "SUIUSD",
 }
 
 
@@ -324,7 +350,26 @@ class PolymarketVenue(Venue):
 
     @staticmethod
     def _infer_market_type_from_text(text: str) -> str:
-        if any(PolymarketVenue._matches_keyword(text, token) for token in ["bitcoin", "btc", "ethereum", "eth", "solana", "sol"]):
+        if any(
+            PolymarketVenue._matches_keyword(text, token)
+            for token in [
+                "bitcoin",
+                "btc",
+                "ethereum",
+                "eth",
+                "solana",
+                "sol",
+                "xrp",
+                "ripple",
+                "doge",
+                "dogecoin",
+                "cardano",
+                "ada",
+                "avalanche",
+                "avax",
+                "sui",
+            ]
+        ):
             if any(token in text for token in ["hit $", "above $", "below $", "between $", "range", "price"]):
                 return "crypto_price"
         if any(PolymarketVenue._matches_keyword(text, token) for token in CRYPTO_TERMS):
@@ -396,8 +441,17 @@ class PolymarketVenue(Venue):
             "sol": "solana",
             "megaeth": "megaeth",
             "xrp": "xrp",
+            "ripple": "xrp",
             "doge": "doge",
             "dogecoin": "doge",
+            "cardano": "cardano",
+            "ada": "cardano",
+            "avalanche": "avax",
+            "avax": "avax",
+            "sui": "sui",
+            "etf": "etf",
+            "staking": "staking",
+            "restaking": "staking",
         }
         for token, theme in theme_tokens.items():
             if re.search(rf"\b{re.escape(token)}\b", lowered):
