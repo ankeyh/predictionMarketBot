@@ -1,0 +1,109 @@
+from pathlib import Path
+
+from bot.dashboard import build_dashboard_summary, render_dashboard_html
+from bot.storage import append_csv, save_json
+
+
+def test_dashboard_summary_reads_bot_files(tmp_path: Path):
+    root = tmp_path
+    data_dir = root / "data"
+    data_dir.mkdir()
+    cfg = {
+        "telemetry": {"data_dir": "data"},
+        "risk": {"starting_cash": 250.0},
+    }
+
+    append_csv(
+        data_dir / "signals.csv",
+        {
+            "market_id": "m1",
+            "market_type": "sports",
+            "question": "Missouri St. at Texas Winner?",
+            "yes_price": 0.07,
+            "no_price": 0.98,
+            "probability": 0.05,
+            "edge": -0.02,
+            "recommendation": "HOLD",
+            "confidence": 0.3,
+            "reasoning": "No edge.",
+        },
+        ["market_id", "market_type", "question", "yes_price", "no_price", "probability", "edge", "recommendation", "confidence", "reasoning"],
+    )
+    append_csv(
+        data_dir / "orders.csv",
+        {
+            "market_id": "m1",
+            "side": "YES",
+            "price": 0.25,
+            "size": 10,
+            "notional": 2.5,
+            "status": "filled-paper",
+            "probability": 0.7,
+            "edge": 0.1,
+            "confidence": 0.8,
+            "reasoning": "Test order",
+        },
+        ["market_id", "side", "price", "size", "notional", "status", "probability", "edge", "confidence", "reasoning"],
+    )
+    save_json(
+        data_dir / "state.json",
+        {
+            "cash": 247.5,
+            "day": "2026-03-20",
+            "daily_notional": 2.5,
+            "realized_pnl": 0.0,
+            "positions": [{"market_id": "m1", "side": "YES", "price": 0.25, "size": 10, "ts": "2026-03-20T12:00:00+00:00"}],
+            "closed_positions": [
+                {
+                    "market_id": "m1",
+                    "question": "Missouri St. at Texas Winner?",
+                    "side": "YES",
+                    "winning_side": "YES",
+                    "payout": 10.0,
+                    "pnl": 7.5,
+                    "settled_at": "2026-03-20T18:00:00+00:00",
+                }
+            ],
+            "last_order_at": {},
+        },
+    )
+
+    summary = build_dashboard_summary(root, cfg)
+
+    assert summary["counts"]["signals"] == 1
+    assert summary["counts"]["orders"] == 1
+    assert summary["counts"]["closed_positions"] == 1
+    assert summary["status"]["cash"] == 247.5
+    assert summary["latest_signal"]["market_id"] == "m1"
+    assert summary["recent_settlements"][0]["market"] == "Missouri St. at Texas Winner?"
+
+
+def test_dashboard_html_contains_heading():
+    html = render_dashboard_html(
+        {
+            "status": {
+                "paused": False,
+                "reason": "",
+                "cash": 250.0,
+                "daily_notional": 0.0,
+                "realized_pnl": 0.0,
+                "positions": 0,
+                "day": "2026-03-20",
+                "latest_cron_line": "",
+            },
+            "counts": {"signals": 0, "orders": 0, "closed_positions": 0, "recommendations": {}},
+            "charts": {"recent_signals": []},
+            "latest_signal": None,
+            "latest_order": None,
+            "recent_signals": [],
+            "recent_orders": [],
+            "open_positions": [],
+            "recent_settlements": [],
+            "discord": {"channel_url": "", "commands": ["prediction bot report"]},
+        }
+    )
+    assert "Prediction Bot" in html
+    assert "/api/summary" in html
+    assert "Discord workflow" in html
+    assert "/action/scan" in html
+    assert "Recent settlements" in html

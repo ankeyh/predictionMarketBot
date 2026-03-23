@@ -1,0 +1,1 @@
+*/5 * * * * cd /Users/hiteshreddyankey/.openclaw/workspace/prediction-market-bot && ./.venv/bin/python run_bot.py scan --once >> data/cron.log 2>&1

@@ -1,0 +1,88 @@
+loop_seconds: 300
+
+venue:
+  name: polymarket
+  min_edge: 0.10
+  min_confidence: 0.70
+  paper_overrides:
+    crypto_price:
+      min_edge: 0.03
+      min_confidence: 0.25
+    crypto_event:
+      min_edge: 0.04
+      min_confidence: 0.30
+    sports:
+      min_edge: 0.01
+      min_confidence: 0.20
+  markets:
+    - id: btc-5m-up
+      market_type: crypto_price
+      question: Will BTC/USD be higher in 5 minutes?
+      yes_price: 0.46
+      no_price: 0.54
+      reference_symbol: BTCUSD
+      context:
+        resolution_window_minutes: 5
+        headline_summary: "BTC trades quietly after mixed macro headlines."
+        price_source: "BTCUSD spot"
+    - id: fed-cut-next-meeting
+      market_type: fed_rates
+      question: Will the Fed cut rates at the next FOMC meeting?
+      yes_price: 0.31
+      no_price: 0.69
+      reference_symbol: FEDFUNDS
+      context:
+        meeting_date: "2026-05-06"
+        implied_path_bps: -12
+        headline_summary: "Inflation cooled slightly while labor data remains resilient."
+    - id: pres-2028-dem-win
+      market_type: election
+      question: Will the Democratic nominee win the 2028 US presidential election?
+      yes_price: 0.52
+      no_price: 0.48
+      reference_symbol: ELECTION
+      context:
+        election_date: "2028-11-07"
+        headline_summary: "Early national polling remains noisy and event risk is high."
+  kalshi_event_ticker: null
+  kalshi_demo: true
+  kalshi_base_url: https://demo-api.kalshi.co/trade-api/v2
+  reference_symbol: BTCUSD
+  allowed_market_types:
+    - crypto_price
+    - crypto_event
+  allowed_keywords:
+    - bitcoin
+    - btc
+    - ethereum
+    - eth
+    - solana
+    - sol
+    - crypto
+    - token
+    - airdrop
+    - fdv
+    - market cap
+  max_days_to_close: 30
+  max_markets: 8
+
+analysis:
+  provider: mock
+  anthropic_model: claude-sonnet-4-20250514
+
+execution:
+  enabled: true
+  mode: paper
+  max_order_notional: 25.0
+  max_daily_notional: 100.0
+  cooldown_minutes: 15
+  allow_repeat_market_orders: false
+
+risk:
+  starting_cash: 250.0
+  max_open_positions: 2
+  max_single_position_notional: 25.0
+  daily_loss_limit: 30.0
+
+telemetry:
+  data_dir: data
