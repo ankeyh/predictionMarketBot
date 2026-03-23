@@ -75,7 +75,7 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
             "day": "2026-03-20",
             "daily_notional": 2.5,
             "realized_pnl": 0.0,
-            "positions": [{"market_id": "m1", "side": "YES", "price": 0.25, "size": 10, "ts": "2026-03-20T12:00:00+00:00"}],
+            "positions": [{"market_id": "m1", "side": "BUY", "price": 95.0, "size": 2, "ts": "2026-03-20T12:00:00+00:00"}],
             "closed_positions": [
                 {
                     "market_id": "m1",
@@ -97,8 +97,11 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
     assert summary["counts"]["orders"] == 1
     assert summary["counts"]["closed_positions"] == 1
     assert summary["status"]["cash"] == 247.5
+    assert summary["status"]["unrealized_pnl"] == 10.0
     assert summary["latest_signal"]["market_id"] == "m1"
     assert summary["latest_spot_signal"]["market_id"] == "m1"
+    assert summary["open_positions"][0]["current"] == "100.0"
+    assert summary["open_positions"][0]["unrealized_pnl"] == "+10.00"
     assert summary["recent_settlements"][0]["market"] == "Missouri St. at Texas Winner?"
     assert summary["recent_settlements"][0]["reason"] == "Settled Yes"
     assert summary["performance"]["closed_count"] == 1
@@ -114,6 +117,7 @@ def test_dashboard_html_contains_heading():
                 "cash": 250.0,
                 "daily_notional": 0.0,
                 "realized_pnl": 0.0,
+                "unrealized_pnl": 0.0,
                 "positions": 0,
                 "day": "2026-03-20",
                 "latest_cron_line": "",

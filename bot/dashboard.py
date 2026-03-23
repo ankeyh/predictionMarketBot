@@ -155,6 +155,11 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
         for row in signals
         if row.get("market_id")
     }
+    latest_signal_by_market = {}
+    for row in signals:
+        market_id = row.get("market_id", "")
+        if market_id:
+            latest_signal_by_market[market_id] = row
 
     recent_signal_chart = []
     for row in signals[-8:]:
@@ -170,6 +175,7 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
         )
 
     open_positions = []
+    unrealized_total = 0.0
     for position in state.get("positions", []):
         market_id = position.get("market_id", "")
         market_label = (
@@ -177,12 +183,24 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             or market_labels.get(market_id)
             or _format_market_id(market_id)
         )
+        latest_row = latest_signal_by_market.get(market_id, {})
+        current_price = latest_row.get("reference_price") or latest_row.get("yes_price") or ""
+        entry_price = _to_float(position.get("price"))
+        size = _to_float(position.get("size"))
+        unrealized_pnl = ""
+        if position.get("side") == "BUY" and current_price not in {"", None}:
+            current_value = _to_float(current_price)
+            unrealized = (current_value - entry_price) * size
+            unrealized_total += unrealized
+            unrealized_pnl = _format_pnl(unrealized)
         open_positions.append(
             {
                 "market": market_label,
                 "side": position.get("side", ""),
                 "price": position.get("price", ""),
                 "size": position.get("size", ""),
+                "current": current_price,
+                "unrealized_pnl": unrealized_pnl,
                 "opened": _format_ts(position.get("ts", "")),
             }
         )
@@ -239,6 +257,7 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             "cash": state.get("cash", cfg["risk"]["starting_cash"]),
             "daily_notional": state.get("daily_notional", 0.0),
             "realized_pnl": state.get("realized_pnl", 0.0),
+            "unrealized_pnl": round(unrealized_total, 4),
             "positions": len(state.get("positions", [])),
             "day": state.get("day", ""),
             "latest_cron_line": _read_latest_cron_line(data_dir),
@@ -813,17 +832,18 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
       </div>
 
       <div class="stack">
-        <section class="panel">
-          <h2>Broker snapshot</h2>
-          <div class="kpis">
-            {_card("Cash", str(status["cash"]))}
-            {_card("Daily notional", str(status["daily_notional"]))}
-            {_card("Realized PnL", str(status["realized_pnl"]))}
-          </div>
-          <div class="meta" style="margin-top: 14px;">
-            <div>Day: {html.escape(str(status["day"]))}</div>
-            <div>Recommendation mix: {html.escape(recommendation_text)}</div>
-            <div>Pause reason: {html.escape(str(status["reason"] or "Not paused"))}</div>
+            <section class="panel">
+              <h2>Broker snapshot</h2>
+              <div class="kpis">
+                {_card("Cash", str(status["cash"]))}
+                {_card("Daily notional", str(status["daily_notional"]))}
+                {_card("Realized PnL", str(status["realized_pnl"]))}
+                {_card("Unrealized PnL", _format_pnl(status["unrealized_pnl"]))}
+              </div>
+              <div class="meta" style="margin-top: 14px;">
+                <div>Day: {html.escape(str(status["day"]))}</div>
+                <div>Recommendation mix: {html.escape(recommendation_text)}</div>
+                <div>Pause reason: {html.escape(str(status["reason"] or "Not paused"))}</div>
           </div>
         </section>
 
@@ -863,7 +883,7 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
 
         <section class="panel">
           <h2>Open positions</h2>
-          {_render_rows(summary["open_positions"], [("market", "Market"), ("side", "Side"), ("price", "Price"), ("size", "Size"), ("opened", "Opened")])}
+          {_render_rows(summary["open_positions"], [("market", "Market"), ("side", "Side"), ("price", "Entry"), ("current", "Current"), ("size", "Size"), ("unrealized_pnl", "Unrealized"), ("opened", "Opened")])}
         </section>
 
         <section class="panel">
