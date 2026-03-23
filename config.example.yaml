@@ -65,6 +65,9 @@ venue:
     - market cap
   max_days_to_close: 30
   max_markets: 8
+  max_markets_per_theme: 1
+  min_contract_price: 0.05
+  max_contract_price: 0.95
 
 analysis:
   provider: mock

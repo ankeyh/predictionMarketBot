@@ -142,6 +142,10 @@ class PolymarketVenue(Venue):
         allowed_types = set(cfg["venue"].get("allowed_market_types", []))
         allowed_keywords = [keyword.lower() for keyword in cfg["venue"].get("allowed_keywords", [])]
         max_markets = int(cfg["venue"].get("max_markets", 10))
+        max_days_to_close = cfg["venue"].get("max_days_to_close")
+        max_per_theme = int(cfg["venue"].get("max_markets_per_theme", 1))
+        min_price = float(cfg["venue"].get("min_contract_price", 0.05))
+        max_price = float(cfg["venue"].get("max_contract_price", 0.95))
         snapshots = []
         for market in data:
             outcomes = self._parse_list_field(market.get("outcomes", []))
@@ -160,6 +164,18 @@ class PolymarketVenue(Venue):
                 continue
             if allowed_keywords and not any(self._matches_keyword(haystack, keyword) for keyword in allowed_keywords):
                 continue
+            end_date_iso = market.get("endDate") or market.get("end_date_iso")
+            days_to_close = self._days_to_close(end_date_iso)
+            if days_to_close is not None and days_to_close < 0:
+                continue
+            if max_days_to_close is not None and days_to_close is not None and days_to_close > float(max_days_to_close):
+                continue
+            yes_price = float(prices[yes_index])
+            no_price = float(prices[no_index])
+            if yes_price <= 0 or no_price <= 0:
+                continue
+            if not (min_price <= yes_price <= max_price and min_price <= no_price <= max_price):
+                continue
             reference_symbol = self._infer_reference_symbol(question, cfg["venue"].get("reference_symbol", "BTCUSD"))
             reference_context = self._load_reference_context(reference_symbol)
             contract_context = (
@@ -167,23 +183,28 @@ class PolymarketVenue(Venue):
                 if market_type in {"crypto_price", "crypto_event"}
                 else {}
             )
+            theme = self._market_theme(question, market.get("slug", ""), market_type)
+            volume_value = float(market.get("volume", 0.0) or 0.0)
             snapshots.append(
                 MarketSnapshot(
                     market_id=str(market.get("conditionId") or market.get("id")),
                     market_type=market_type,
                     question=question,
-                    yes_price=float(prices[yes_index]),
-                    no_price=float(prices[no_index]),
+                    yes_price=yes_price,
+                    no_price=no_price,
                     reference_symbol=reference_symbol,
                     reference_price=reference_context.get("spot_price"),
                     change_5m_pct=reference_context.get("change_5m_pct"),
                     headline_summary=contract_context.get("headline_summary", ""),
-                    volume=float(market.get("volume", 0.0)) if market.get("volume") is not None else None,
+                    volume=volume_value if market.get("volume") is not None else None,
                     extra={
                         "slug": market.get("slug", ""),
                         "active": market.get("active"),
-                        "end_date_iso": market.get("endDate") or market.get("end_date_iso"),
-                        "volume_score": float(market.get("volume", 0.0) or 0.0),
+                        "end_date_iso": end_date_iso,
+                        "days_to_close": days_to_close,
+                        "theme": theme,
+                        "quality_score": self._quality_score(market_type, yes_price, no_price, volume_value, days_to_close),
+                        "volume_score": volume_value,
                         **contract_context,
                     },
                 )
@@ -191,10 +212,22 @@ class PolymarketVenue(Venue):
         snapshots.sort(
             key=lambda snap: (
                 0 if snap.market_type == "crypto_price" else 1,
-                -(snap.volume or 0.0),
+                -float(snap.extra.get("quality_score", 0.0)),
+                snap.extra.get("days_to_close") is None,
+                snap.extra.get("days_to_close", 999999),
             )
         )
-        return snapshots[:max_markets]
+        selected = []
+        per_theme: dict[str, int] = {}
+        for snapshot in snapshots:
+            theme = str(snapshot.extra.get("theme", "")) or "unknown"
+            if per_theme.get(theme, 0) >= max_per_theme:
+                continue
+            selected.append(snapshot)
+            per_theme[theme] = per_theme.get(theme, 0) + 1
+            if len(selected) >= max_markets:
+                break
+        return selected
 
     def execute(self, intent: OrderIntent, mode: str) -> Fill:
         if mode != "live":
@@ -336,6 +369,65 @@ class PolymarketVenue(Venue):
             "spot_price": spot_price,
             "change_5m_pct": change_5m_pct,
         }
+
+    @staticmethod
+    def _days_to_close(end_date_iso: str | None) -> float | None:
+        if not end_date_iso:
+            return None
+        normalized = end_date_iso.replace("Z", "+00:00")
+        try:
+            end_dt = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=timezone.utc)
+        delta = end_dt - datetime.now(timezone.utc)
+        return round(delta.total_seconds() / 86400, 3)
+
+    @staticmethod
+    def _market_theme(question: str, slug: str, market_type: str) -> str:
+        lowered = f"{question} {slug}".lower()
+        theme_tokens = {
+            "bitcoin": "bitcoin",
+            "btc": "bitcoin",
+            "ethereum": "ethereum",
+            "eth": "ethereum",
+            "solana": "solana",
+            "sol": "solana",
+            "megaeth": "megaeth",
+            "xrp": "xrp",
+            "doge": "doge",
+            "dogecoin": "doge",
+        }
+        for token, theme in theme_tokens.items():
+            if re.search(rf"\b{re.escape(token)}\b", lowered):
+                return f"{market_type}:{theme}"
+        words = re.findall(r"[a-z0-9]+", lowered)
+        keep = [word for word in words if len(word) > 3][:3]
+        stem = "-".join(keep) if keep else market_type
+        return f"{market_type}:{stem}"
+
+    @staticmethod
+    def _quality_score(
+        market_type: str,
+        yes_price: float,
+        no_price: float,
+        volume: float,
+        days_to_close: float | None,
+    ) -> float:
+        score = 0.0
+        score += 1.5 if market_type == "crypto_price" else 0.8
+        score += min(volume / 5000.0, 2.0)
+        price_balance = 1.0 - abs(yes_price - no_price)
+        score += max(price_balance, 0.0)
+        if days_to_close is not None:
+            if days_to_close <= 7:
+                score += 1.0
+            elif days_to_close <= 21:
+                score += 0.5
+            elif days_to_close > 60:
+                score -= 1.0
+        return round(score, 4)
 
     @staticmethod
     def _crypto_contract_context(question: str, reference_context: dict[str, Any]) -> dict[str, Any]:

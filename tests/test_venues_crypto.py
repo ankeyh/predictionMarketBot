@@ -36,3 +36,23 @@ def test_infer_market_type_from_text_for_crypto_event():
         "will megaeth perform an airdrop by june 30 megaeth airdrop token"
     )
     assert market_type == "crypto_event"
+
+
+def test_market_theme_groups_similar_markets():
+    first = PolymarketVenue._market_theme(
+        "Will MegaETH perform an airdrop by June 30?",
+        "megaeth-airdrop-june-30",
+        "crypto_event",
+    )
+    second = PolymarketVenue._market_theme(
+        "MegaETH market cap (FDV) >$6B one day after launch?",
+        "megaeth-market-cap-6b",
+        "crypto_event",
+    )
+    assert first == second == "crypto_event:megaeth"
+
+
+def test_quality_score_prefers_nearer_cleaner_market():
+    near_score = PolymarketVenue._quality_score("crypto_price", 0.48, 0.52, 9000.0, 5.0)
+    far_score = PolymarketVenue._quality_score("crypto_event", 0.03, 0.97, 100.0, 120.0)
+    assert near_score > far_score
