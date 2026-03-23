@@ -584,6 +584,7 @@ class AlpacaVenue(Venue):
             discovery = self._discover_market_metadata(reference_symbol)
             if not context:
                 continue
+            momentum_score = self._momentum_score(context, discovery)
             snapshots.append(
                 MarketSnapshot(
                     market_id=product.replace("-", "/"),
@@ -603,6 +604,7 @@ class AlpacaVenue(Venue):
                         "realized_vol_1h": float(context.get("realized_vol_1h", 0.0) or 0.0),
                         "price_change_24h_pct": discovery.get("price_change_percentage_24h"),
                         "market_cap_rank": discovery.get("market_cap_rank"),
+                        "momentum_score": momentum_score,
                         "discovery_source": "coingecko",
                         "horizon_hours": horizon_hours,
                     },
@@ -707,6 +709,17 @@ class AlpacaVenue(Venue):
         if rank:
             pieces.append(f"market-cap rank #{rank}")
         return "; ".join(pieces) + "."
+
+    @staticmethod
+    def _momentum_score(context: dict[str, Any], discovery: dict[str, Any]) -> float:
+        drift_5m = float(context.get("change_5m_pct", 0.0) or 0.0)
+        drift_1h = float(context.get("change_1h_pct", 0.0) or 0.0)
+        drift_24h = float(discovery.get("price_change_percentage_24h", 0.0) or 0.0) / 100.0
+        vol_1h = float(context.get("realized_vol_1h", 0.0) or 0.0)
+
+        raw = (drift_5m * 2.0) + (drift_1h * 3.0) + drift_24h - (vol_1h * 1.5)
+        normalized = max(-1.0, min(1.0, raw / 0.08))
+        return round(normalized, 4)
 
     def _submit_order(self, intent: OrderIntent, paper: bool) -> str:
         if not self.api_key or not self.secret_key:

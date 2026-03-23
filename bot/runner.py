@@ -92,6 +92,7 @@ def process_once(root: Path, cfg: dict) -> int:
             "realized_vol_1h": snapshot.extra.get("realized_vol_1h", ""),
             "price_change_24h_pct": snapshot.extra.get("price_change_24h_pct", ""),
             "market_cap_rank": snapshot.extra.get("market_cap_rank", ""),
+            "momentum_score": snapshot.extra.get("momentum_score", ""),
             "reasoning": analysis.reasoning,
         }
         append_csv(
@@ -113,6 +114,7 @@ def process_once(root: Path, cfg: dict) -> int:
                 "realized_vol_1h",
                 "price_change_24h_pct",
                 "market_cap_rank",
+                "momentum_score",
                 "reasoning",
             ],
         )

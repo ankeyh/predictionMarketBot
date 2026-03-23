@@ -31,6 +31,7 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
             "realized_vol_1h": 0.03,
             "price_change_24h_pct": 4.5,
             "market_cap_rank": 7,
+            "momentum_score": 0.42,
             "reasoning": "No edge.",
         },
         [
@@ -49,6 +50,7 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
             "realized_vol_1h",
             "price_change_24h_pct",
             "market_cap_rank",
+            "momentum_score",
             "reasoning",
         ],
     )

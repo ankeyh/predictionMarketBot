@@ -53,7 +53,7 @@ venue:
   reference_symbol: BTCUSD
   discovery_source: coingecko
   discovery_limit: 25
-  spot_horizon_hours: 4
+  spot_horizon_hours: 2
   spot_symbols:
     - BTCUSD
     - ETHUSD
@@ -87,7 +87,7 @@ execution:
     crypto_spot:
       take_profit_pct: 0.04
       stop_loss_pct: 0.025
-      max_hold_minutes: 240
+      max_hold_minutes: 120
       exit_on_opposite_signal: true
       min_exit_confidence: 0.40
     crypto_price:

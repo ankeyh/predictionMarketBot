@@ -83,3 +83,17 @@ def test_spot_headline_includes_intraday_context():
     assert "5m drift" in headline
     assert "1h drift" in headline
     assert "1h realized vol" in headline
+
+
+def test_momentum_score_rewards_aligned_trend():
+    score = AlpacaVenue._momentum_score(
+        {
+            "change_5m_pct": 0.004,
+            "change_1h_pct": 0.012,
+            "realized_vol_1h": 0.006,
+        },
+        {
+            "price_change_percentage_24h": 6.0,
+        },
+    )
+    assert score > 0
