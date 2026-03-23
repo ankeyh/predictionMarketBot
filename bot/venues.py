@@ -529,6 +529,174 @@ class PolymarketVenue(Venue):
         return context
 
 
+class AlpacaVenue(Venue):
+    SUPPORTED_SYMBOLS = {
+        "BTCUSD": "BTC-USD",
+        "ETHUSD": "ETH-USD",
+        "SOLUSD": "SOL-USD",
+        "XRPUSD": "XRP-USD",
+        "DOGEUSD": "DOGE-USD",
+        "ADAUSD": "ADA-USD",
+        "AVAXUSD": "AVAX-USD",
+        "SUIUSD": "SUI-USD",
+    }
+
+    def __init__(self) -> None:
+        self.api_key = os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_API_KEY_ID")
+        self.secret_key = os.getenv("APCA_API_SECRET_KEY") or os.getenv("ALPACA_API_SECRET_KEY")
+
+    def load_markets(self, cfg: dict) -> list[MarketSnapshot]:
+        symbols = cfg["venue"].get("spot_symbols") or self._discover_symbols(cfg)
+        max_markets = int(cfg["venue"].get("max_markets", len(symbols) or 1))
+        horizon_hours = int(cfg["venue"].get("spot_horizon_hours", 4))
+        snapshots = []
+        for reference_symbol in symbols:
+            product = self.SUPPORTED_SYMBOLS.get(reference_symbol)
+            if not product:
+                continue
+            context = PolymarketVenue._load_reference_context(reference_symbol)
+            discovery = self._discover_market_metadata(reference_symbol)
+            if not context:
+                continue
+            snapshots.append(
+                MarketSnapshot(
+                    market_id=product.replace("-", "/"),
+                    market_type="crypto_spot",
+                    question=f"Will {product} be higher over the next {horizon_hours} hours?",
+                    yes_price=0.5,
+                    no_price=0.5,
+                    reference_symbol=reference_symbol,
+                    reference_price=float(context.get("spot_price", 0.0) or 0.0),
+                    change_5m_pct=float(context.get("change_5m_pct", 0.0) or 0.0),
+                    headline_summary=self._spot_headline(product, context, discovery),
+                    volume=float(discovery.get("total_volume", 0.0) or 0.0),
+                    extra={
+                        "spot_price": float(context.get("spot_price", 0.0) or 0.0),
+                        "product": product,
+                        "price_change_24h_pct": discovery.get("price_change_percentage_24h"),
+                        "market_cap_rank": discovery.get("market_cap_rank"),
+                        "discovery_source": "coingecko",
+                        "horizon_hours": horizon_hours,
+                    },
+                )
+            )
+        snapshots.sort(
+            key=lambda snap: (
+                -(snap.volume or 0.0),
+                -abs(float(snap.extra.get("price_change_24h_pct") or 0.0)),
+            )
+        )
+        return snapshots[:max_markets]
+
+    def execute(self, intent: OrderIntent, mode: str) -> Fill:
+        if mode != "live":
+            if self.api_key and self.secret_key:
+                status = self._submit_order(intent, paper=True)
+            else:
+                status = "paper-alpaca-sim"
+            return Fill(
+                market_id=intent.market_id,
+                market_type="alpaca",
+                side=intent.side,
+                price=intent.price,
+                size=intent.size,
+                notional=round(intent.size * intent.price, 4),
+                status=status,
+                ts=utc_now_iso(),
+            )
+        status = self._submit_order(intent, paper=False)
+        return Fill(
+            market_id=intent.market_id,
+            market_type="alpaca",
+            side=intent.side,
+            price=intent.price,
+            size=intent.size,
+            notional=round(intent.size * intent.price, 4),
+            status=status,
+            ts=utc_now_iso(),
+        )
+
+    def _discover_symbols(self, cfg: dict) -> list[str]:
+        response = requests.get(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            params={
+                "vs_currency": "usd",
+                "order": "volume_desc",
+                "per_page": int(cfg["venue"].get("discovery_limit", 25)),
+                "page": 1,
+                "sparkline": "false",
+                "price_change_percentage": "24h",
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        symbols = []
+        for coin in response.json():
+            reference_symbol = f"{str(coin.get('symbol', '')).upper()}USD"
+            if reference_symbol in self.SUPPORTED_SYMBOLS and reference_symbol not in symbols:
+                symbols.append(reference_symbol)
+        configured = cfg["venue"].get("spot_symbols", [])
+        for symbol in configured:
+            if symbol not in symbols and symbol in self.SUPPORTED_SYMBOLS:
+                symbols.insert(0, symbol)
+        return symbols
+
+    def _discover_market_metadata(self, reference_symbol: str) -> dict[str, Any]:
+        base = reference_symbol[:-3].lower()
+        response = requests.get(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            params={
+                "vs_currency": "usd",
+                "ids": "",
+                "symbols": base,
+                "order": "market_cap_desc",
+                "per_page": 1,
+                "page": 1,
+                "sparkline": "false",
+                "price_change_percentage": "24h",
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        rows = response.json()
+        return rows[0] if rows else {}
+
+    @staticmethod
+    def _spot_headline(product: str, context: dict[str, Any], discovery: dict[str, Any]) -> str:
+        spot = float(context.get("spot_price", 0.0) or 0.0)
+        drift_5m = float(context.get("change_5m_pct", 0.0) or 0.0)
+        drift_24h = float(discovery.get("price_change_percentage_24h", 0.0) or 0.0) / 100.0
+        rank = discovery.get("market_cap_rank")
+        pieces = [
+            f"{product} spot {spot:.4f}" if spot else f"{product} spot unavailable",
+            f"5m drift {drift_5m:+.2%}",
+            f"24h drift {drift_24h:+.2%}",
+        ]
+        if rank:
+            pieces.append(f"market-cap rank #{rank}")
+        return "; ".join(pieces) + "."
+
+    def _submit_order(self, intent: OrderIntent, paper: bool) -> str:
+        if not self.api_key or not self.secret_key:
+            raise ValueError("Set APCA_API_KEY_ID and APCA_API_SECRET_KEY for Alpaca execution.")
+        base_url = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
+        headers = {
+            "APCA-API-KEY-ID": self.api_key,
+            "APCA-API-SECRET-KEY": self.secret_key,
+        }
+        payload = {
+            "symbol": intent.market_id.replace("/", ""),
+            "side": "buy" if intent.side == "BUY" else "sell",
+            "type": "market",
+            "time_in_force": "gtc",
+            "qty": f"{intent.size:.8f}",
+        }
+        response = requests.post(f"{base_url}/v2/orders", headers=headers, json=payload, timeout=20)
+        response.raise_for_status()
+        order = response.json()
+        return f"{'paper' if paper else 'live'}-alpaca:{order.get('status', 'submitted')}"
+
+
 class KalshiVenue(Venue):
     def __init__(self) -> None:
         self.api_key_id = os.getenv("KALSHI_API_KEY_ID")
@@ -778,6 +946,8 @@ def build_venue(cfg: dict) -> Venue:
         return MockVenue()
     if venue_name == "polymarket":
         return PolymarketVenue()
+    if venue_name == "alpaca":
+        return AlpacaVenue()
     if venue_name == "kalshi":
         return KalshiVenue()
     raise ValueError(f"Unsupported venue: {venue_name}")

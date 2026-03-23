@@ -205,3 +205,65 @@ def test_paper_broker_closes_position_on_take_profit(tmp_path: Path):
     assert broker.state["positions"] == []
     assert broker.state["cash"] == 100.8
     assert broker.state["realized_pnl"] == 0.8
+
+
+def test_paper_broker_closes_crypto_spot_position_on_take_profit(tmp_path: Path):
+    cfg = {
+        "risk": {
+            "starting_cash": 1000.0,
+            "max_open_positions": 2,
+            "max_single_position_notional": 250.0,
+            "daily_loss_limit": 50.0,
+        },
+        "execution": {
+            "max_daily_notional": 500.0,
+            "cooldown_minutes": 15,
+            "allow_repeat_market_orders": False,
+            "paper_exit_rules": {
+                "crypto_spot": {
+                    "take_profit_pct": 0.03,
+                    "stop_loss_pct": 0.02,
+                    "max_hold_minutes": 0,
+                    "exit_on_opposite_signal": False,
+                    "min_exit_confidence": 0.0,
+                }
+            },
+        },
+    }
+    broker = PaperBroker(cfg, tmp_path)
+    broker.apply_fill(
+        Fill(
+            market_id="BTC/USD",
+            market_type="alpaca",
+            side="BUY",
+            price=100.0,
+            size=1.0,
+            notional=100.0,
+            status="paper-alpaca-sim",
+            ts="2026-03-20T12:00:00+00:00",
+            question="Will BTC-USD be higher over the next 4 hours?",
+        )
+    )
+
+    closed = broker.close_positions(
+        {
+            "BTC/USD": type(
+                "Snap",
+                (),
+                {
+                    "market_id": "BTC/USD",
+                    "market_type": "crypto_spot",
+                    "question": "Will BTC-USD be higher over the next 4 hours?",
+                    "reference_price": 104.0,
+                    "extra": {"spot_price": 104.0},
+                },
+            )()
+        },
+        {},
+        cfg,
+    )
+
+    assert len(closed) == 1
+    assert closed[0]["close_reason"] == "take_profit"
+    assert closed[0]["pnl"] == 4.0
+    assert broker.state["cash"] == 1004.0

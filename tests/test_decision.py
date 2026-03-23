@@ -52,3 +52,37 @@ def test_hold_filtered_out():
     )
 
     assert derive_order(snapshot, analysis, BASE_CFG) is None
+
+
+def test_crypto_spot_order_created_as_buy():
+    cfg = {
+        "venue": {
+            "min_edge": 0.10,
+            "min_confidence": 0.70,
+            "paper_overrides": {"crypto_spot": {"min_edge": 0.04, "min_confidence": 0.35}},
+        },
+        "execution": {"max_order_notional": 25.0, "mode": "paper"},
+        "risk": {"max_single_position_notional": 25.0},
+    }
+    snapshot = MarketSnapshot(
+        market_id="BTC/USD",
+        market_type="crypto_spot",
+        question="Will BTC-USD be higher over the next 4 hours?",
+        yes_price=0.5,
+        no_price=0.5,
+        reference_symbol="BTCUSD",
+        reference_price=85000.0,
+    )
+    analysis = AnalysisResult(
+        probability=0.62,
+        edge=0.12,
+        recommendation="BUY_YES",
+        confidence=0.5,
+        reasoning="Momentum favors the upside.",
+    )
+
+    order = derive_order(snapshot, analysis, cfg)
+
+    assert order is not None
+    assert order.side == "BUY"
+    assert order.price == 85000.0

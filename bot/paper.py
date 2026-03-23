@@ -145,7 +145,10 @@ class PaperBroker:
                 remaining_positions.append(position)
                 continue
 
-            current_price = snapshot.yes_price if position.get("side") == "YES" else snapshot.no_price
+            if snapshot.market_type == "crypto_spot":
+                current_price = float(snapshot.reference_price or snapshot.extra.get("spot_price") or 0.0)
+            else:
+                current_price = snapshot.yes_price if position.get("side") == "YES" else snapshot.no_price
             if current_price <= 0:
                 remaining_positions.append(position)
                 continue
@@ -153,14 +156,19 @@ class PaperBroker:
             entry_price = float(position.get("price", 0.0) or 0.0)
             size = float(position.get("size", 0.0) or 0.0)
             notional = float(position.get("notional", entry_price * size) or 0.0)
-            pnl = round((current_price - entry_price) * size, 4)
-            pnl_pct = ((current_price - entry_price) / entry_price) if entry_price > 0 else 0.0
+            if snapshot.market_type == "crypto_spot":
+                direction = 1.0 if position.get("side") == "BUY" else -1.0
+                pnl = round((current_price - entry_price) * size * direction, 4)
+                pnl_pct = (((current_price - entry_price) / entry_price) * direction) if entry_price > 0 else 0.0
+            else:
+                pnl = round((current_price - entry_price) * size, 4)
+                pnl_pct = ((current_price - entry_price) / entry_price) if entry_price > 0 else 0.0
             reason = self._close_reason(position, snapshot, analyses.get(snapshot.market_id), pnl_pct, now, rules)
             if not reason:
                 remaining_positions.append(position)
                 continue
 
-            proceeds = round(current_price * size, 4)
+            proceeds = round(current_price * size, 4) if position.get("side") == "BUY" else round(notional + pnl, 4)
             closed_row = {
                 "market_id": position["market_id"],
                 "question": position.get("question", snapshot.question),

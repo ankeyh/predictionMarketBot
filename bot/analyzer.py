@@ -21,6 +21,7 @@ class MockAnalyzer(Analyzer):
         yes_price = snapshot.yes_price
         market_type_bias = {
             "crypto_price": 1.5,
+            "crypto_spot": 1.8,
             "fed_rates": 0.4,
             "election": 0.2,
         }.get(snapshot.market_type, 0.5)
