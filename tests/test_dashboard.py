@@ -17,17 +17,40 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
         data_dir / "signals.csv",
         {
             "market_id": "m1",
-            "market_type": "sports",
+            "market_type": "crypto_spot",
             "question": "Missouri St. at Texas Winner?",
             "yes_price": 0.07,
             "no_price": 0.98,
+            "reference_price": 100.0,
             "probability": 0.05,
             "edge": -0.02,
             "recommendation": "HOLD",
             "confidence": 0.3,
+            "change_5m_pct": 0.01,
+            "change_1h_pct": 0.02,
+            "realized_vol_1h": 0.03,
+            "price_change_24h_pct": 4.5,
+            "market_cap_rank": 7,
             "reasoning": "No edge.",
         },
-        ["market_id", "market_type", "question", "yes_price", "no_price", "probability", "edge", "recommendation", "confidence", "reasoning"],
+        [
+            "market_id",
+            "market_type",
+            "question",
+            "yes_price",
+            "no_price",
+            "reference_price",
+            "probability",
+            "edge",
+            "recommendation",
+            "confidence",
+            "change_5m_pct",
+            "change_1h_pct",
+            "realized_vol_1h",
+            "price_change_24h_pct",
+            "market_cap_rank",
+            "reasoning",
+        ],
     )
     append_csv(
         data_dir / "orders.csv",
@@ -75,6 +98,7 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
     assert summary["counts"]["closed_positions"] == 1
     assert summary["status"]["cash"] == 247.5
     assert summary["latest_signal"]["market_id"] == "m1"
+    assert summary["latest_spot_signal"]["market_id"] == "m1"
     assert summary["recent_settlements"][0]["market"] == "Missouri St. at Texas Winner?"
     assert summary["recent_settlements"][0]["reason"] == "Settled Yes"
     assert summary["performance"]["closed_count"] == 1
@@ -97,6 +121,7 @@ def test_dashboard_html_contains_heading():
             "counts": {"signals": 0, "orders": 0, "closed_positions": 0, "recommendations": {}},
             "charts": {"recent_signals": [], "close_reasons": {}},
             "latest_signal": None,
+            "latest_spot_signal": None,
             "latest_order": None,
             "recent_signals": [],
             "recent_orders": [],
@@ -119,3 +144,4 @@ def test_dashboard_html_contains_heading():
     assert "/action/scan" in html
     assert "Recent closes" in html
     assert "Performance snapshot" in html
+    assert "Spot signal context" in html

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import statistics
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timezone
 from typing import Any
@@ -404,15 +405,40 @@ class PolymarketVenue(Venue):
         candle_response.raise_for_status()
         candles = candle_response.json()
         change_5m_pct = 0.0
+        recent_returns = []
         if len(candles) >= 2:
             latest_close = float(candles[0][4])
             prior_close = float(candles[1][4])
             if prior_close:
                 change_5m_pct = (latest_close - prior_close) / prior_close
+            ordered = list(reversed(candles[:12]))
+            for idx in range(1, len(ordered)):
+                prev_close = float(ordered[idx - 1][4])
+                current_close = float(ordered[idx][4])
+                if prev_close:
+                    recent_returns.append((current_close - prev_close) / prev_close)
+
+        hour_response = requests.get(
+            f"https://api.exchange.coinbase.com/products/{product}/candles",
+            params={"granularity": 3600, "limit": 2},
+            timeout=10,
+        )
+        hour_response.raise_for_status()
+        hour_candles = hour_response.json()
+        change_1h_pct = 0.0
+        if len(hour_candles) >= 2:
+            latest_hour_close = float(hour_candles[0][4])
+            prior_hour_close = float(hour_candles[1][4])
+            if prior_hour_close:
+                change_1h_pct = (latest_hour_close - prior_hour_close) / prior_hour_close
+
+        realized_vol_1h = statistics.pstdev(recent_returns) if len(recent_returns) >= 2 else 0.0
         return {
             "product": product,
             "spot_price": spot_price,
             "change_5m_pct": change_5m_pct,
+            "change_1h_pct": change_1h_pct,
+            "realized_vol_1h": realized_vol_1h,
         }
 
     @staticmethod
@@ -573,6 +599,8 @@ class AlpacaVenue(Venue):
                     extra={
                         "spot_price": float(context.get("spot_price", 0.0) or 0.0),
                         "product": product,
+                        "change_1h_pct": float(context.get("change_1h_pct", 0.0) or 0.0),
+                        "realized_vol_1h": float(context.get("realized_vol_1h", 0.0) or 0.0),
                         "price_change_24h_pct": discovery.get("price_change_percentage_24h"),
                         "market_cap_rank": discovery.get("market_cap_rank"),
                         "discovery_source": "coingecko",
@@ -665,11 +693,15 @@ class AlpacaVenue(Venue):
     def _spot_headline(product: str, context: dict[str, Any], discovery: dict[str, Any]) -> str:
         spot = float(context.get("spot_price", 0.0) or 0.0)
         drift_5m = float(context.get("change_5m_pct", 0.0) or 0.0)
+        drift_1h = float(context.get("change_1h_pct", 0.0) or 0.0)
+        vol_1h = float(context.get("realized_vol_1h", 0.0) or 0.0)
         drift_24h = float(discovery.get("price_change_percentage_24h", 0.0) or 0.0) / 100.0
         rank = discovery.get("market_cap_rank")
         pieces = [
             f"{product} spot {spot:.4f}" if spot else f"{product} spot unavailable",
             f"5m drift {drift_5m:+.2%}",
+            f"1h drift {drift_1h:+.2%}",
+            f"1h realized vol {vol_1h:.2%}",
             f"24h drift {drift_24h:+.2%}",
         ]
         if rank:

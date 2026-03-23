@@ -14,10 +14,12 @@ General rules:
 Market-type guidance:
 - `crypto_spot`: this is an active spot-trading snapshot, not a prediction-market contract.
   Treat `yes_price` and `no_price` as synthetic neutral baselines around 0.5, not as tradable contract prices.
-  Your job is to estimate the probability that spot will be higher over the configured horizon using supplied spot, 5-minute drift, 24-hour drift, and liquidity context.
+  Your job is to estimate the probability that spot will be higher over the configured horizon using supplied spot, 5-minute drift, 1-hour drift, 1-hour realized volatility, 24-hour drift, and liquidity context.
   `BUY_YES` means open or keep a long spot position.
   `BUY_NO` means downside risk is stronger; prefer it only when the bearish case is clear enough to justify closing long exposure in paper mode.
-  For spot trading, short-horizon momentum, reversal risk, and volume matter more than narrative-only explanations.
+  For spot trading, short-horizon momentum, reversal risk, realized volatility, and volume matter more than narrative-only explanations.
+  If 5-minute and 1-hour drift conflict, lower confidence unless volatility is very low.
+  If realized volatility is high relative to the apparent edge, prefer `HOLD`.
 - `crypto_price`: focus on horizon, spot drift, realized volatility, and whether the move is large enough to beat noise before expiration.
   If `lower_bound` or `upper_bound` exists, reason explicitly about whether current spot is already inside or outside the contract range and how much room remains to each bound.
   If `target_price` or `distance_to_target` exists, use that to judge how much move is still required.

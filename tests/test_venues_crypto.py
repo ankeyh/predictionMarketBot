@@ -1,4 +1,4 @@
-from bot.venues import PolymarketVenue
+from bot.venues import AlpacaVenue, PolymarketVenue
 
 
 def test_infer_reference_symbol_for_crypto_questions():
@@ -64,3 +64,22 @@ def test_infer_market_type_from_text_for_altcoin_price():
         "will xrp price trade above $5 by december"
     )
     assert market_type == "crypto_price"
+
+
+def test_spot_headline_includes_intraday_context():
+    headline = AlpacaVenue._spot_headline(
+        "BTC-USD",
+        {
+            "spot_price": 85000.0,
+            "change_5m_pct": 0.002,
+            "change_1h_pct": 0.011,
+            "realized_vol_1h": 0.009,
+        },
+        {
+            "price_change_percentage_24h": 5.5,
+            "market_cap_rank": 1,
+        },
+    )
+    assert "5m drift" in headline
+    assert "1h drift" in headline
+    assert "1h realized vol" in headline

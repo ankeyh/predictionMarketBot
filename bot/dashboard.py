@@ -81,6 +81,18 @@ def _format_pnl(value: Any) -> str:
     return f"{prefix}{amount:.2f}"
 
 
+def _format_pct(value: Any) -> str:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    return f"{amount:+.2%}"
+
+
+def _format_24h_pct(value: Any) -> str:
+    return _format_pct(_to_float(value) / 100.0)
+
+
 def _performance_summary(closed_positions: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(closed_positions)
     if total == 0:
@@ -210,6 +222,7 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
         )
 
     latest_order = recent_orders[0] if recent_orders else None
+    latest_spot_signal = next((row for row in reversed(signals) if row.get("market_type") == "crypto_spot"), None)
 
     discord_commands = [
         "prediction bot report",
@@ -242,6 +255,7 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
         },
         "performance": performance,
         "latest_signal": signals[-1] if signals else None,
+        "latest_spot_signal": latest_spot_signal,
         "latest_order": latest_order,
         "recent_signals": list(reversed(signals[-10:])),
         "recent_orders": recent_orders,
@@ -384,6 +398,7 @@ def _render_discord_panel(discord: dict[str, Any]) -> str:
 def render_dashboard_html(summary: dict[str, Any]) -> str:
     status = summary["status"]
     latest_signal = summary["latest_signal"] or {}
+    latest_spot_signal = summary.get("latest_spot_signal") or {}
     latest_order = summary["latest_order"] or {}
     performance = summary["performance"]
     paused_tone = "danger" if status["paused"] else "success"
@@ -776,6 +791,19 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
         <section class="panel">
           <h2>Recent signal chart</h2>
           {_render_signal_chart(summary["charts"]["recent_signals"])}
+        </section>
+
+        <section class="panel">
+          <h2>Spot signal context</h2>
+          <div class="meta">
+            <div>Market: {html.escape(str(latest_spot_signal.get("question", "No spot signals yet")))}</div>
+            <div>Spot: {html.escape(str(latest_spot_signal.get("reference_price", "n/a")))}</div>
+            <div>5m drift: {html.escape(_format_pct(latest_spot_signal.get("change_5m_pct", "")))}</div>
+            <div>1h drift: {html.escape(_format_pct(latest_spot_signal.get("change_1h_pct", "")))}</div>
+            <div>1h realized vol: {html.escape(_format_pct(latest_spot_signal.get("realized_vol_1h", "")))}</div>
+            <div>24h drift: {html.escape(_format_24h_pct(latest_spot_signal.get("price_change_24h_pct", "")))}</div>
+            <div>Rank: {html.escape(str(latest_spot_signal.get("market_cap_rank", "n/a")))}</div>
+          </div>
         </section>
 
         <section class="panel">
