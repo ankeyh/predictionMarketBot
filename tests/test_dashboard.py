@@ -76,6 +76,7 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
     assert summary["status"]["cash"] == 247.5
     assert summary["latest_signal"]["market_id"] == "m1"
     assert summary["recent_settlements"][0]["market"] == "Missouri St. at Texas Winner?"
+    assert summary["recent_settlements"][0]["reason"] == "Settled Yes"
 
 
 def test_dashboard_html_contains_heading():
@@ -106,4 +107,4 @@ def test_dashboard_html_contains_heading():
     assert "/api/summary" in html
     assert "Discord workflow" in html
     assert "/action/scan" in html
-    assert "Recent settlements" in html
+    assert "Recent closes" in html

@@ -77,6 +77,19 @@ execution:
   max_daily_notional: 100.0
   cooldown_minutes: 15
   allow_repeat_market_orders: false
+  paper_exit_rules:
+    crypto_price:
+      take_profit_pct: 0.18
+      stop_loss_pct: 0.10
+      max_hold_minutes: 720
+      exit_on_opposite_signal: true
+      min_exit_confidence: 0.45
+    crypto_event:
+      take_profit_pct: 0.25
+      stop_loss_pct: 0.12
+      max_hold_minutes: 1440
+      exit_on_opposite_signal: true
+      min_exit_confidence: 0.50
 
 risk:
   starting_cash: 250.0

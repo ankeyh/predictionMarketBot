@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .models import Fill, OrderIntent, utc_now_iso
+from .models import AnalysisResult, Fill, MarketSnapshot, OrderIntent, utc_now_iso
 from .storage import load_json, save_json
 
 
@@ -123,9 +123,114 @@ class PaperBroker:
             self.state["positions"] = hydrated_positions
             self.save()
 
+    def close_positions(
+        self,
+        snapshots: dict[str, MarketSnapshot],
+        analyses: dict[str, AnalysisResult],
+        cfg: dict,
+    ) -> list[dict]:
+        closed: list[dict] = []
+        remaining_positions = []
+        exit_rules = cfg.get("execution", {}).get("paper_exit_rules", {})
+        now = datetime.now(timezone.utc)
+
+        for position in self.state["positions"]:
+            snapshot = snapshots.get(position.get("market_id", ""))
+            if not snapshot:
+                remaining_positions.append(position)
+                continue
+
+            rules = exit_rules.get(snapshot.market_type) or exit_rules.get("default") or {}
+            if not rules:
+                remaining_positions.append(position)
+                continue
+
+            current_price = snapshot.yes_price if position.get("side") == "YES" else snapshot.no_price
+            if current_price <= 0:
+                remaining_positions.append(position)
+                continue
+
+            entry_price = float(position.get("price", 0.0) or 0.0)
+            size = float(position.get("size", 0.0) or 0.0)
+            notional = float(position.get("notional", entry_price * size) or 0.0)
+            pnl = round((current_price - entry_price) * size, 4)
+            pnl_pct = ((current_price - entry_price) / entry_price) if entry_price > 0 else 0.0
+            reason = self._close_reason(position, snapshot, analyses.get(snapshot.market_id), pnl_pct, now, rules)
+            if not reason:
+                remaining_positions.append(position)
+                continue
+
+            proceeds = round(current_price * size, 4)
+            closed_row = {
+                "market_id": position["market_id"],
+                "question": position.get("question", snapshot.question),
+                "market_slug": position.get("market_slug", snapshot.extra.get("slug", "")),
+                "market_type": position.get("market_type", snapshot.market_type),
+                "side": position["side"],
+                "winning_side": "",
+                "entry_price": round(entry_price, 4),
+                "exit_price": round(current_price, 4),
+                "size": round(size, 4),
+                "notional": round(notional, 4),
+                "payout": proceeds,
+                "pnl": pnl,
+                "opened_at": position.get("ts", ""),
+                "settled_at": utc_now_iso(),
+                "status": "closed",
+                "close_reason": reason,
+            }
+            self.state["cash"] += proceeds
+            self.state["realized_pnl"] += pnl
+            self.state.setdefault("last_order_at", {})[position["market_id"]] = utc_now_iso()
+            self.state["closed_positions"].append(closed_row)
+            closed.append(closed_row)
+
+        self.state["positions"] = remaining_positions
+        if closed:
+            self.save()
+        return closed
+
+    @staticmethod
+    def _close_reason(
+        position: dict,
+        snapshot: MarketSnapshot,
+        analysis: AnalysisResult | None,
+        pnl_pct: float,
+        now: datetime,
+        rules: dict,
+    ) -> str:
+        stop_loss_pct = float(rules.get("stop_loss_pct", 0.0) or 0.0)
+        take_profit_pct = float(rules.get("take_profit_pct", 0.0) or 0.0)
+        max_hold_minutes = int(rules.get("max_hold_minutes", 0) or 0)
+        min_exit_confidence = float(rules.get("min_exit_confidence", 0.0) or 0.0)
+        exit_on_opposite_signal = bool(rules.get("exit_on_opposite_signal", False))
+
+        if stop_loss_pct > 0 and pnl_pct <= -stop_loss_pct:
+            return "stop_loss"
+        if take_profit_pct > 0 and pnl_pct >= take_profit_pct:
+            return "take_profit"
+
+        if exit_on_opposite_signal and analysis and analysis.confidence >= min_exit_confidence:
+            if position.get("side") == "YES" and analysis.recommendation == "BUY_NO":
+                return "opposite_signal"
+            if position.get("side") == "NO" and analysis.recommendation == "BUY_YES":
+                return "opposite_signal"
+
+        if max_hold_minutes > 0:
+            opened_at = position.get("ts", "")
+            try:
+                opened = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
+            except ValueError:
+                opened = None
+            if opened and (now - opened).total_seconds() >= max_hold_minutes * 60:
+                return "max_hold"
+
+        return ""
+
     def reject_fill(self, intent: OrderIntent, reason: str) -> Fill:
         return Fill(
             market_id=intent.market_id,
+            market_type="",
             side=intent.side,
             price=intent.price,
             size=intent.size,

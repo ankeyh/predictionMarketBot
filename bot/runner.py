@@ -69,11 +69,13 @@ def process_once(root: Path, cfg: dict) -> int:
         )
 
     markets = venue.load_markets(cfg)
+    snapshot_by_id = {snapshot.market_id: snapshot for snapshot in markets}
+    analyses = {}
     signal_count = 0
 
     for snapshot in markets:
         analysis = analyzer.analyze(snapshot)
-        order = derive_order(snapshot, analysis, cfg)
+        analyses[snapshot.market_id] = analysis
         signal_row = {
             "market_id": snapshot.market_id,
             "market_type": snapshot.market_type,
@@ -101,6 +103,44 @@ def process_once(root: Path, cfg: dict) -> int:
                 f"Reason: {analysis.reasoning}"
             )
 
+    closed_positions = broker.close_positions(snapshot_by_id, analyses, cfg)
+    for closed in closed_positions:
+        append_csv(
+            data_dir / "closures.csv",
+            closed,
+            [
+                "market_id",
+                "question",
+                "market_slug",
+                "market_type",
+                "side",
+                "winning_side",
+                "entry_price",
+                "exit_price",
+                "size",
+                "notional",
+                "payout",
+                "pnl",
+                "opened_at",
+                "settled_at",
+                "status",
+                "close_reason",
+            ],
+        )
+        send_telegram_alert(
+            f"Prediction market position closed\n"
+            f"Market: {closed['question']}\n"
+            f"Position: {closed['side']}\n"
+            f"Reason: {closed['close_reason']}\n"
+            f"PnL: {closed['pnl']:.2f}"
+        )
+
+    closed_market_ids = {row["market_id"] for row in closed_positions}
+    for snapshot in markets:
+        if snapshot.market_id in closed_market_ids:
+            continue
+        analysis = analyses[snapshot.market_id]
+        order = derive_order(snapshot, analysis, cfg)
         if not order or not cfg["execution"]["enabled"]:
             continue
 
@@ -108,6 +148,7 @@ def process_once(root: Path, cfg: dict) -> int:
         allowed, reason = broker.can_place(order)
         if allowed:
             fill = venue.execute(order, cfg["execution"]["mode"])
+            fill.market_type = snapshot.market_type
             fill.question = snapshot.question
             fill.market_slug = str(snapshot.extra.get("slug", ""))
             fill.end_date_iso = str(snapshot.extra.get("end_date_iso", ""))

@@ -149,11 +149,14 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             or market_labels.get(market_id)
             or _format_market_id(market_id)
         )
+        close_reason = closed.get("close_reason") or closed.get("status", "")
+        if closed.get("winning_side"):
+            close_reason = f"settled {closed.get('winning_side')}"
         recent_settlements.append(
             {
                 "market": market_label,
                 "side": closed.get("side", ""),
-                "winner": closed.get("winning_side", ""),
+                "reason": _format_status(close_reason),
                 "payout": closed.get("payout", ""),
                 "pnl": _format_pnl(closed.get("pnl", 0.0)),
                 "settled_at": _format_ts(closed.get("settled_at", "")),
@@ -677,7 +680,7 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
       {_card("Signals logged", str(summary["counts"]["signals"]))}
       {_card("Orders logged", str(summary["counts"]["orders"]))}
       {_card("Open positions", str(status["positions"]), "warn" if status["positions"] else "")}
-      {_card("Settled bets", str(summary["counts"]["closed_positions"]), "neutral")}
+      {_card("Closed bets", str(summary["counts"]["closed_positions"]), "neutral")}
     </div>
 
     <section class="panel" style="margin-bottom:18px;">
@@ -762,8 +765,8 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
         </section>
 
         <section class="panel">
-          <h2>Recent settlements</h2>
-          {_render_rows(summary["recent_settlements"], [("market", "Market"), ("side", "Side"), ("winner", "Winner"), ("payout", "Payout"), ("pnl", "PnL"), ("settled_at", "Settled")])}
+          <h2>Recent closes</h2>
+          {_render_rows(summary["recent_settlements"], [("market", "Market"), ("side", "Side"), ("reason", "Reason"), ("payout", "Payout"), ("pnl", "PnL"), ("settled_at", "Closed")])}
         </section>
 
         <section class="panel">

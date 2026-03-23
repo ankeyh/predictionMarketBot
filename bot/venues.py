@@ -102,6 +102,7 @@ class MockVenue(Venue):
         status = "filled-paper" if mode == "paper" else "filled-live-mock"
         return Fill(
             market_id=intent.market_id,
+            market_type="mock",
             side=intent.side,
             price=intent.price,
             size=intent.size,
@@ -199,6 +200,7 @@ class PolymarketVenue(Venue):
         if mode != "live":
             return Fill(
                 market_id=intent.market_id,
+                market_type="polymarket",
                 side=intent.side,
                 price=intent.price,
                 size=intent.size,
@@ -457,6 +459,7 @@ class KalshiVenue(Venue):
         if mode != "live":
             return Fill(
                 market_id=intent.market_id,
+                market_type="kalshi",
                 side=intent.side,
                 price=intent.price,
                 size=intent.size,
@@ -613,6 +616,7 @@ class KalshiVenue(Venue):
         filled_count = float(order.get("fill_count_fp") or order.get("initial_count") or count)
         return Fill(
             market_id=intent.market_id,
+            market_type="kalshi",
             side=intent.side,
             price=fill_price,
             size=filled_count,

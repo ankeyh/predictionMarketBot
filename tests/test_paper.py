@@ -35,6 +35,7 @@ def test_paper_broker_applies_fill(tmp_path: Path):
 
     fill = Fill(
         market_id=intent.market_id,
+        market_type="polymarket",
         side=intent.side,
         price=intent.price,
         size=intent.size,
@@ -66,6 +67,7 @@ def test_paper_broker_rejects_repeat_market_order(tmp_path: Path):
     broker = PaperBroker(cfg, tmp_path)
     fill = Fill(
         market_id="btc-5m-up",
+        market_type="polymarket",
         side="YES",
         price=0.5,
         size=20.0,
@@ -120,6 +122,7 @@ def test_paper_broker_settles_winning_position(tmp_path: Path):
     broker.apply_fill(
         Fill(
             market_id="btc-1m",
+            market_type="polymarket",
             side="NO",
             price=0.4,
             size=10.0,
@@ -138,3 +141,67 @@ def test_paper_broker_settles_winning_position(tmp_path: Path):
     assert broker.state["cash"] == 106.0
     assert broker.state["realized_pnl"] == 6.0
     assert broker.state["positions"] == []
+
+
+def test_paper_broker_closes_position_on_take_profit(tmp_path: Path):
+    cfg = {
+        "risk": {
+            "starting_cash": 100.0,
+            "max_open_positions": 2,
+            "max_single_position_notional": 25.0,
+            "daily_loss_limit": 20.0,
+        },
+        "execution": {
+            "max_daily_notional": 50.0,
+            "cooldown_minutes": 15,
+            "allow_repeat_market_orders": False,
+            "paper_exit_rules": {
+                "crypto_price": {
+                    "take_profit_pct": 0.10,
+                    "stop_loss_pct": 0.05,
+                    "max_hold_minutes": 0,
+                    "exit_on_opposite_signal": False,
+                    "min_exit_confidence": 0.0,
+                }
+            },
+        },
+    }
+    broker = PaperBroker(cfg, tmp_path)
+    broker.apply_fill(
+        Fill(
+            market_id="btc-range",
+            market_type="crypto_price",
+            side="YES",
+            price=0.40,
+            size=10.0,
+            notional=4.0,
+            status="filled-paper",
+            ts="2026-03-20T12:00:00+00:00",
+            question="Will BTC close above $80k?",
+        )
+    )
+
+    closed = broker.close_positions(
+        {
+            "btc-range": type(
+                "Snap",
+                (),
+                {
+                    "market_id": "btc-range",
+                    "market_type": "crypto_price",
+                    "question": "Will BTC close above $80k?",
+                    "yes_price": 0.48,
+                    "no_price": 0.52,
+                    "extra": {},
+                },
+            )()
+        },
+        {},
+        cfg,
+    )
+
+    assert len(closed) == 1
+    assert closed[0]["close_reason"] == "take_profit"
+    assert broker.state["positions"] == []
+    assert broker.state["cash"] == 100.8
+    assert broker.state["realized_pnl"] == 0.8

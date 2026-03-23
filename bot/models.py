@@ -57,6 +57,7 @@ class Position:
 @dataclass
 class Fill:
     market_id: str
+    market_type: str
     side: str
     price: float
     size: float
@@ -66,6 +67,7 @@ class Fill:
     question: str = ""
     market_slug: str = ""
     end_date_iso: str = ""
+    close_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
