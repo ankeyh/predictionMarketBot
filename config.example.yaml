@@ -83,6 +83,13 @@ execution:
   max_daily_notional: 100.0
   cooldown_minutes: 15
   allow_repeat_market_orders: false
+  spot_guardrail:
+    enabled: true
+    min_momentum_score: 0.25
+    min_change_1h_pct: 0.0005
+    min_realized_vol_1h: 0.0007
+    max_realized_vol_1h: 0.03
+    require_drift_alignment: true
   paper_exit_rules:
     crypto_spot:
       take_profit_pct: 0.04

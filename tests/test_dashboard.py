@@ -92,6 +92,45 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
             "last_order_at": {},
         },
     )
+    save_json(
+        data_dir / "last_scan.json",
+        {
+            "ts": "2026-03-20T18:05:00+00:00",
+            "status": "completed",
+            "markets_scanned": 4,
+            "signals_emitted": 1,
+            "blocked_spot_markets": 2,
+        },
+    )
+    append_csv(
+        data_dir / "blocked_spot.csv",
+        {
+            "ts": "2026-03-20T18:04:00+00:00",
+            "market_id": "xrp-2h",
+            "market_type": "crypto_spot",
+            "question": "Will XRP-USD be higher over the next 2 hours?",
+            "reason": "volatility too low",
+            "reference_price": 0.62,
+            "change_5m_pct": 0.001,
+            "change_1h_pct": 0.002,
+            "realized_vol_1h": 0.0004,
+            "price_change_24h_pct": 3.5,
+            "momentum_score": 0.21,
+        },
+        [
+            "ts",
+            "market_id",
+            "market_type",
+            "question",
+            "reason",
+            "reference_price",
+            "change_5m_pct",
+            "change_1h_pct",
+            "realized_vol_1h",
+            "price_change_24h_pct",
+            "momentum_score",
+        ],
+    )
 
     summary = build_dashboard_summary(root, cfg)
 
@@ -108,6 +147,11 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
     assert summary["recent_settlements"][0]["reason"] == "Settled Yes"
     assert summary["performance"]["closed_count"] == 1
     assert summary["performance"]["win_rate"] == 1.0
+    assert summary["status"]["last_successful_scan"] == "2026-03-20 18:05 UTC"
+    assert summary["status"]["last_scan_markets"] == 4
+    assert summary["status"]["last_scan_blocked"] == 2
+    assert summary["recent_blocked_spot"][0]["market"] == "Will XRP-USD be higher over the next 2 hours?"
+    assert summary["recent_blocked_spot"][0]["reason"] == "Volatility Too Low"
 
 
 def test_dashboard_html_contains_heading():
@@ -123,6 +167,9 @@ def test_dashboard_html_contains_heading():
                 "positions": 0,
                 "day": "2026-03-20",
                 "latest_cron_line": "",
+                "last_successful_scan": "2026-03-20 18:05 UTC",
+                "last_scan_markets": 4,
+                "last_scan_blocked": 2,
             },
             "counts": {"signals": 0, "orders": 0, "closed_positions": 0, "recommendations": {}},
             "charts": {"recent_signals": [], "close_reasons": {}},
@@ -133,6 +180,7 @@ def test_dashboard_html_contains_heading():
             "recent_orders": [],
             "open_positions": [],
             "recent_settlements": [],
+            "recent_blocked_spot": [],
             "performance": {
                 "closed_count": 0,
                 "win_rate": 0.0,
@@ -151,3 +199,5 @@ def test_dashboard_html_contains_heading():
     assert "Recent closes" in html
     assert "Performance snapshot" in html
     assert "Spot signal context" in html
+    assert "Last successful scan" in html
+    assert "Why no trade" in html

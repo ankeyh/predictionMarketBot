@@ -50,6 +50,9 @@ telemetry:
 
     process_once(root, cfg)
     capsys.readouterr()
+    last_scan = json.loads((root / "data" / "last_scan.json").read_text(encoding="utf-8"))
+    assert last_scan["status"] == "completed"
+    assert "blocked_spot_markets" in last_scan
     command_status(root, cfg)
     status = json.loads(capsys.readouterr().out)
     assert status["paused"] is False

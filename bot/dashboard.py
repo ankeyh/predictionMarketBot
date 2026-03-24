@@ -129,6 +129,11 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
     data_dir = root / cfg["telemetry"]["data_dir"]
     signals = _load_csv_rows(data_dir / "signals.csv")
     orders = _load_csv_rows(data_dir / "orders.csv")
+    blocked_spot = _load_csv_rows(data_dir / "blocked_spot.csv")
+    last_scan = load_json(
+        data_dir / "last_scan.json",
+        {"ts": "", "status": "", "markets_scanned": 0, "signals_emitted": 0, "blocked_spot_markets": 0},
+    )
     state = load_json(
         data_dir / "state.json",
         {
@@ -241,6 +246,17 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
 
     latest_order = recent_orders[0] if recent_orders else None
     latest_spot_signal = next((row for row in reversed(signals) if row.get("market_type") == "crypto_spot"), None)
+    recent_blocked_spot = []
+    for row in reversed(blocked_spot[-8:]):
+        recent_blocked_spot.append(
+            {
+                "market": row.get("question", row.get("market_id", "")),
+                "reason": _format_status(row.get("reason", "")),
+                "momentum": row.get("momentum_score", ""),
+                "drift_1h": _format_pct(row.get("change_1h_pct", "")),
+                "vol_1h": _format_pct(row.get("realized_vol_1h", "")),
+            }
+        )
 
     discord_commands = [
         "prediction bot report",
@@ -261,6 +277,9 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             "positions": len(state.get("positions", [])),
             "day": state.get("day", ""),
             "latest_cron_line": _read_latest_cron_line(data_dir),
+            "last_successful_scan": _format_ts(last_scan.get("ts", "")),
+            "last_scan_markets": last_scan.get("markets_scanned", 0),
+            "last_scan_blocked": last_scan.get("blocked_spot_markets", 0),
         },
         "counts": {
             "signals": len(signals),
@@ -280,6 +299,7 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
         "recent_orders": recent_orders,
         "open_positions": open_positions,
         "recent_settlements": recent_settlements,
+        "recent_blocked_spot": recent_blocked_spot,
         "discord": {
             "channel_url": os.getenv("DISCORD_CHANNEL_URL", ""),
             "commands": discord_commands,
@@ -772,6 +792,7 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
       {_card("Orders logged", str(summary["counts"]["orders"]))}
       {_card("Open positions", str(status["positions"]), "warn" if status["positions"] else "")}
       {_card("Closed bets", str(summary["counts"]["closed_positions"]), "neutral")}
+      {_card("Last successful scan", str(status["last_successful_scan"] or "No scan yet"), "neutral")}
     </div>
 
     <section class="panel" style="margin-bottom:18px;">
@@ -830,6 +851,11 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
           <h2>Recent orders</h2>
           {_render_rows(summary["recent_orders"], [("market", "Market"), ("side", "Side"), ("status_label", "Status"), ("notional", "Notional"), ("confidence", "Conf")])}
         </section>
+
+        <section class="panel">
+          <h2>Why no trade</h2>
+          {_render_rows(summary["recent_blocked_spot"], [("market", "Market"), ("reason", "Reason"), ("momentum", "Momentum"), ("drift_1h", "1h drift"), ("vol_1h", "1h vol")])}
+        </section>
       </div>
 
       <div class="stack">
@@ -844,6 +870,8 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
               <div class="meta" style="margin-top: 14px;">
                 <div>Day: {html.escape(str(status["day"]))}</div>
                 <div>Recommendation mix: {html.escape(recommendation_text)}</div>
+                <div>Last scan markets: {html.escape(str(status["last_scan_markets"]))}</div>
+                <div>Blocked by guardrail: {html.escape(str(status["last_scan_blocked"]))}</div>
                 <div>Pause reason: {html.escape(str(status["reason"] or "Not paused"))}</div>
           </div>
         </section>

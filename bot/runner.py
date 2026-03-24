@@ -14,8 +14,33 @@ from .decision import derive_order
 from .discord_router import parse_discord_command
 from .kalshi_check import check_kalshi, format_check
 from .paper import PaperBroker
-from .storage import append_csv, ensure_dir
+from .storage import append_csv, ensure_dir, save_json
 from .venues import build_venue
+
+
+def _spot_guardrail(snapshot, cfg: dict) -> str:
+    guard = cfg.get("execution", {}).get("spot_guardrail", {})
+    if not guard.get("enabled", True):
+        return ""
+    if snapshot.market_type != "crypto_spot":
+        return ""
+
+    momentum_score = float(snapshot.extra.get("momentum_score", 0.0) or 0.0)
+    change_5m = float(snapshot.change_5m_pct or 0.0)
+    change_1h = float(snapshot.extra.get("change_1h_pct", 0.0) or 0.0)
+    realized_vol = float(snapshot.extra.get("realized_vol_1h", 0.0) or 0.0)
+
+    if momentum_score < float(guard.get("min_momentum_score", 0.0) or 0.0):
+        return "momentum below threshold"
+    if change_1h < float(guard.get("min_change_1h_pct", 0.0) or 0.0):
+        return "1h drift below threshold"
+    if realized_vol < float(guard.get("min_realized_vol_1h", 0.0) or 0.0):
+        return "volatility too low"
+    if realized_vol > float(guard.get("max_realized_vol_1h", 1.0) or 1.0):
+        return "volatility too high"
+    if guard.get("require_drift_alignment", True) and change_5m * change_1h < 0:
+        return "5m and 1h drift conflict"
+    return ""
 
 
 def process_once(root: Path, cfg: dict) -> int:
@@ -72,8 +97,43 @@ def process_once(root: Path, cfg: dict) -> int:
     snapshot_by_id = {snapshot.market_id: snapshot for snapshot in markets}
     analyses = {}
     signal_count = 0
+    blocked_spot_rows = []
 
     for snapshot in markets:
+        blocked_reason = _spot_guardrail(snapshot, cfg)
+        if blocked_reason:
+            blocked_row = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "market_id": snapshot.market_id,
+                "market_type": snapshot.market_type,
+                "question": snapshot.question,
+                "reason": blocked_reason,
+                "reference_price": snapshot.reference_price,
+                "change_5m_pct": snapshot.change_5m_pct,
+                "change_1h_pct": snapshot.extra.get("change_1h_pct", ""),
+                "realized_vol_1h": snapshot.extra.get("realized_vol_1h", ""),
+                "price_change_24h_pct": snapshot.extra.get("price_change_24h_pct", ""),
+                "momentum_score": snapshot.extra.get("momentum_score", ""),
+            }
+            blocked_spot_rows.append(blocked_row)
+            append_csv(
+                data_dir / "blocked_spot.csv",
+                blocked_row,
+                [
+                    "ts",
+                    "market_id",
+                    "market_type",
+                    "question",
+                    "reason",
+                    "reference_price",
+                    "change_5m_pct",
+                    "change_1h_pct",
+                    "realized_vol_1h",
+                    "price_change_24h_pct",
+                    "momentum_score",
+                ],
+            )
+            continue
         analysis = analyzer.analyze(snapshot)
         analyses[snapshot.market_id] = analysis
         signal_row = {
@@ -164,7 +224,9 @@ def process_once(root: Path, cfg: dict) -> int:
     for snapshot in markets:
         if snapshot.market_id in closed_market_ids:
             continue
-        analysis = analyses[snapshot.market_id]
+        analysis = analyses.get(snapshot.market_id)
+        if not analysis:
+            continue
         order = derive_order(snapshot, analysis, cfg)
         if not order or not cfg["execution"]["enabled"]:
             continue
@@ -205,16 +267,15 @@ def process_once(root: Path, cfg: dict) -> int:
             f"Status: {fill.status}"
         )
 
-    print(
-        json.dumps(
-            {
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "status": "completed",
-                "markets_scanned": len(markets),
-                "signals_emitted": signal_count,
-            }
-        )
-    )
+    payload = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "status": "completed",
+        "markets_scanned": len(markets),
+        "signals_emitted": signal_count,
+        "blocked_spot_markets": len(blocked_spot_rows),
+    }
+    save_json(data_dir / "last_scan.json", payload)
+    print(json.dumps(payload))
 
     return signal_count
 
