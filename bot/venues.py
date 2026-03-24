@@ -743,6 +743,7 @@ class AlpacaVenue(Venue):
         self.api_key = os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_API_KEY_ID")
         self.secret_key = os.getenv("APCA_API_SECRET_KEY") or os.getenv("ALPACA_API_SECRET_KEY")
         self._discovery_cache: dict[str, dict[str, Any]] = {}
+        self.data_url = os.getenv("ALPACA_DATA_URL", "https://data.alpaca.markets/v1beta3/crypto/us")
 
     def load_markets(self, cfg: dict) -> list[MarketSnapshot]:
         symbols = cfg["venue"].get("spot_symbols") or self._discover_symbols(cfg)
@@ -753,7 +754,7 @@ class AlpacaVenue(Venue):
             product = self.SUPPORTED_SYMBOLS.get(reference_symbol)
             if not product:
                 continue
-            context = PolymarketVenue._load_reference_context(reference_symbol)
+            context = self._load_reference_context(reference_symbol)
             discovery = self._discover_market_metadata(reference_symbol)
             if not context:
                 continue
@@ -790,7 +791,7 @@ class AlpacaVenue(Venue):
                         "price_change_24h_pct": discovery.get("price_change_percentage_24h"),
                         "market_cap_rank": discovery.get("market_cap_rank"),
                         "momentum_score": momentum_score,
-                        "discovery_source": "coingecko",
+                        "discovery_source": "alpaca",
                         "horizon_hours": horizon_hours,
                     },
                 )
@@ -832,58 +833,182 @@ class AlpacaVenue(Venue):
         )
 
     def _discover_symbols(self, cfg: dict) -> list[str]:
-        symbols = []
-        try:
-            response = requests.get(
-                "https://api.coingecko.com/api/v3/coins/markets",
-                params={
-                    "vs_currency": "usd",
-                    "order": "volume_desc",
-                    "per_page": int(cfg["venue"].get("discovery_limit", 25)),
-                    "page": 1,
-                    "sparkline": "false",
-                    "price_change_percentage": "24h",
-                },
-                timeout=15,
-            )
-            response.raise_for_status()
-            for coin in response.json():
-                reference_symbol = f"{str(coin.get('symbol', '')).upper()}USD"
-                if reference_symbol in self.SUPPORTED_SYMBOLS and reference_symbol not in symbols:
-                    symbols.append(reference_symbol)
-        except requests.RequestException:
-            pass
         configured = cfg["venue"].get("spot_symbols", [])
+        symbols = []
         for symbol in configured:
             if symbol not in symbols and symbol in self.SUPPORTED_SYMBOLS:
                 symbols.insert(0, symbol)
+        if not symbols:
+            symbols = list(self.SUPPORTED_SYMBOLS.keys())
         return symbols
 
     def _discover_market_metadata(self, reference_symbol: str) -> dict[str, Any]:
         if reference_symbol in self._discovery_cache:
             return self._discovery_cache[reference_symbol]
-        base = reference_symbol[:-3].lower()
+        product = self.SUPPORTED_SYMBOLS.get(reference_symbol)
+        if not product:
+            return {}
         try:
             response = requests.get(
-                "https://api.coingecko.com/api/v3/coins/markets",
+                f"{self.data_url}/snapshots",
                 params={
-                    "vs_currency": "usd",
-                    "symbols": base,
-                    "order": "market_cap_desc",
-                    "per_page": 1,
-                    "page": 1,
-                    "sparkline": "false",
-                    "price_change_percentage": "24h",
+                    "symbols": product,
                 },
                 timeout=15,
             )
             response.raise_for_status()
-            rows = response.json()
-            metadata = rows[0] if rows else {}
+            payload = response.json()
+            snapshots = payload.get("snapshots", {})
+            snap = snapshots.get(product, {})
+            latest_daily = snap.get("dailyBar", {}) or {}
+            previous_daily = snap.get("previousDailyBar", {}) or {}
+            latest_bar = snap.get("latestBar", {}) or {}
+            prev_close = float(previous_daily.get("c", 0.0) or 0.0)
+            latest_close = float(latest_daily.get("c", latest_bar.get("c", 0.0)) or 0.0)
+            price_change_percentage_24h = 0.0
+            if prev_close:
+                price_change_percentage_24h = ((latest_close - prev_close) / prev_close) * 100
+            metadata = {
+                "price_change_percentage_24h": price_change_percentage_24h,
+                "total_volume": float(latest_daily.get("v", latest_bar.get("v", 0.0)) or 0.0),
+                "market_cap_rank": "",
+            }
         except requests.RequestException:
             metadata = {}
         self._discovery_cache[reference_symbol] = metadata
         return metadata
+
+    def _load_reference_context(self, reference_symbol: str) -> dict[str, float | str]:
+        product = self.SUPPORTED_SYMBOLS.get(reference_symbol)
+        if not product:
+            return {}
+
+        def fetch_bars(timeframe: str, limit: int) -> list[list[float]]:
+            response = requests.get(
+                f"{self.data_url}/bars",
+                params={
+                    "symbols": product,
+                    "timeframe": timeframe,
+                    "limit": limit,
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            bars = payload.get("bars", {}).get(product, [])
+            # Normalize dict bars into the Coinbase-style [t, l, h, o, c, v]
+            return [
+                [
+                    row.get("t", ""),
+                    float(row.get("l", 0.0) or 0.0),
+                    float(row.get("h", 0.0) or 0.0),
+                    float(row.get("o", 0.0) or 0.0),
+                    float(row.get("c", 0.0) or 0.0),
+                    float(row.get("v", 0.0) or 0.0),
+                ]
+                for row in bars
+            ]
+
+        try:
+            candles = fetch_bars("5Min", 60)
+            quarter_candles = fetch_bars("15Min", 40)
+            hour_candles = fetch_bars("1Hour", 48)
+        except requests.RequestException:
+            # Fallback preserves liveness if Alpaca market data blips.
+            return PolymarketVenue._load_reference_context(reference_symbol)
+
+        ordered = candles
+        closes = [float(candle[4]) for candle in ordered]
+        if not closes:
+            return {}
+        spot_price = closes[-1]
+        change_5m_pct = 0.0
+        recent_returns = []
+        if len(closes) >= 2:
+            prior_close = closes[-2]
+            if prior_close:
+                change_5m_pct = (closes[-1] - prior_close) / prior_close
+            for idx in range(1, len(ordered[-12:])):
+                prev_close = float(ordered[-12:][idx - 1][4])
+                current_close = float(ordered[-12:][idx][4])
+                if prev_close:
+                    recent_returns.append((current_close - prev_close) / prev_close)
+
+        quarter_ordered = quarter_candles
+        quarter_closes = [float(candle[4]) for candle in quarter_ordered]
+        change_15m_pct = 0.0
+        if len(quarter_closes) >= 2:
+            prior_15m_close = quarter_closes[-2]
+            if prior_15m_close:
+                change_15m_pct = (quarter_closes[-1] - prior_15m_close) / prior_15m_close
+
+        hour_ordered = hour_candles
+        hour_closes = [float(candle[4]) for candle in hour_ordered]
+        change_1h_pct = 0.0
+        change_4h_pct = 0.0
+        if len(hour_closes) >= 2:
+            prior_hour_close = hour_closes[-2]
+            if prior_hour_close:
+                change_1h_pct = (hour_closes[-1] - prior_hour_close) / prior_hour_close
+        if len(hour_closes) >= 5:
+            prior_4h_close = hour_closes[-5]
+            if prior_4h_close:
+                change_4h_pct = (hour_closes[-1] - prior_4h_close) / prior_4h_close
+
+        realized_vol_1h = statistics.pstdev(recent_returns) if len(recent_returns) >= 2 else 0.0
+        ema_fast = PolymarketVenue._ema(closes, 9)
+        ema_slow = PolymarketVenue._ema(closes, 21)
+        ema_15m_fast = PolymarketVenue._ema(quarter_closes, 8)
+        ema_15m_slow = PolymarketVenue._ema(quarter_closes, 21)
+        ema_1h_fast = PolymarketVenue._ema(hour_closes, 4)
+        ema_1h_slow = PolymarketVenue._ema(hour_closes, 9)
+        rsi_14 = PolymarketVenue._rsi(closes, 14)
+        atr_14 = PolymarketVenue._atr(ordered, 14)
+        atr_pct = (atr_14 / spot_price) if spot_price else 0.0
+        candle_bias = PolymarketVenue._candle_bias(ordered)
+        breakout_pct = PolymarketVenue._breakout_pct(ordered, 20)
+        setup_score = PolymarketVenue._setup_score(
+            {
+                "change_5m_pct": change_5m_pct,
+                "change_15m_pct": change_15m_pct,
+                "change_1h_pct": change_1h_pct,
+                "change_4h_pct": change_4h_pct,
+                "ema_fast_9": ema_fast,
+                "ema_slow_21": ema_slow,
+                "ema_15m_fast": ema_15m_fast,
+                "ema_15m_slow": ema_15m_slow,
+                "ema_1h_fast": ema_1h_fast,
+                "ema_1h_slow": ema_1h_slow,
+                "rsi_14": rsi_14,
+                "atr_pct": atr_pct,
+                "candle_bias": candle_bias,
+                "breakout_pct": breakout_pct,
+            }
+        )
+        return {
+            "product": product,
+            "spot_price": spot_price,
+            "change_5m_pct": change_5m_pct,
+            "change_15m_pct": change_15m_pct,
+            "change_1h_pct": change_1h_pct,
+            "change_4h_pct": change_4h_pct,
+            "realized_vol_1h": realized_vol_1h,
+            "ema_fast_9": ema_fast,
+            "ema_slow_21": ema_slow,
+            "ema_spread_pct": ((ema_fast - ema_slow) / ema_slow) if ema_slow else 0.0,
+            "ema_15m_fast": ema_15m_fast,
+            "ema_15m_slow": ema_15m_slow,
+            "ema_15m_spread_pct": ((ema_15m_fast - ema_15m_slow) / ema_15m_slow) if ema_15m_slow else 0.0,
+            "ema_1h_fast": ema_1h_fast,
+            "ema_1h_slow": ema_1h_slow,
+            "ema_1h_spread_pct": ((ema_1h_fast - ema_1h_slow) / ema_1h_slow) if ema_1h_slow else 0.0,
+            "rsi_14": rsi_14,
+            "atr_14": atr_14,
+            "atr_pct": atr_pct,
+            "candle_bias": candle_bias,
+            "breakout_pct": breakout_pct,
+            "setup_score": setup_score,
+        }
 
     @staticmethod
     def _spot_headline(product: str, context: dict[str, Any], discovery: dict[str, Any]) -> str:
