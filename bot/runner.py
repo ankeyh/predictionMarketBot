@@ -134,7 +134,7 @@ def _spot_guardrail(snapshot, cfg: dict) -> str:
     min_vol_1h = float(guard.get("min_realized_vol_1h", 0.0) or 0.0)
 
     if bearish_setup:
-        min_score = max(0.12, min_score - 0.05)
+        min_score = max(0.10, min_score - 0.07)
         min_change_1h = max(0.0, min_change_1h - 0.0002)
         min_vol_1h = max(0.0003, min_vol_1h - 0.00015)
 

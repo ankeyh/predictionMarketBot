@@ -96,7 +96,7 @@ class CandleAnalyzer(Analyzer):
         bearish_trigger = breakout_pct < 0.006 and candle_bias < 0.18 and 28 <= rsi <= 60
         if trend_score >= 0.22 and setup_score >= 0.18 and aligned_trend and trigger_ready:
             recommendation = "BUY_YES"
-        elif trend_score <= -0.18 and setup_score <= -0.15 and bearish_trend and bearish_trigger:
+        elif trend_score <= -0.14 and setup_score <= -0.10 and bearish_trend and bearish_trigger:
             recommendation = "BUY_NO"
         else:
             recommendation = "HOLD"
