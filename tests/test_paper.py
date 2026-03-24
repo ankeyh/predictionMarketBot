@@ -93,6 +93,50 @@ def test_paper_broker_rejects_repeat_market_order(tmp_path: Path):
     assert reason == "existing position already open"
 
 
+def test_paper_broker_allows_distinct_spot_positions_until_portfolio_limit(tmp_path: Path):
+    cfg = {
+        "risk": {
+            "starting_cash": 500.0,
+            "max_open_positions": 4,
+            "max_single_position_notional": 100.0,
+            "daily_loss_limit": 50.0,
+        },
+        "execution": {
+            "max_daily_notional": 300.0,
+            "cooldown_minutes": 15,
+            "allow_repeat_market_orders": False,
+        },
+    }
+    broker = PaperBroker(cfg, tmp_path)
+    broker.apply_fill(
+        Fill(
+            market_id="BTC/USD",
+            market_type="alpaca",
+            side="BUY",
+            price=100.0,
+            size=1.0,
+            notional=100.0,
+            status="paper-alpaca-sim",
+            ts="2026-03-20T12:00:00+00:00",
+        )
+    )
+
+    intent = OrderIntent(
+        market_id="ETH/USD",
+        side="BUY",
+        price=50.0,
+        size=1.0,
+        probability=0.7,
+        edge=0.2,
+        confidence=0.8,
+        reasoning="Different symbol",
+    )
+
+    allowed, reason = broker.can_place(intent)
+    assert allowed is True
+    assert reason == ""
+
+
 class _ResolvedVenue:
     def fetch_settlement(self, position):
         return {

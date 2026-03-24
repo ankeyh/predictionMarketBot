@@ -273,7 +273,9 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             {
                 "market": row.get("question", row.get("market_id", "")),
                 "reason": _format_status(row.get("reason", "")),
+                "setup_score": row.get("setup_score", ""),
                 "momentum": row.get("momentum_score", ""),
+                "drift_15m": _format_pct(row.get("change_15m_pct", "")),
                 "drift_1h": _format_pct(row.get("change_1h_pct", "")),
                 "vol_1h": _format_pct(row.get("realized_vol_1h", "")),
             }
@@ -819,6 +821,7 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
       {_card("Closed bets", str(summary["counts"]["closed_positions"]), "neutral")}
       {_card("Last successful scan", str(status["last_successful_scan"] or "No scan yet"), "neutral")}
       {_card("Adaptive mode", f"{status['adaptive_mode']} ({status['adaptive_level']:+d})", "neutral")}
+      {_card("Candle setup score", str((latest_spot_signal.get("setup_score") if latest_spot_signal else "n/a") or "n/a"), "neutral")}
     </div>
 
     <section class="panel" style="margin-bottom:18px;">
@@ -865,13 +868,19 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
             <div>Market: {html.escape(str(latest_spot_signal.get("question", "No spot signals yet")))}</div>
             <div>Spot: {html.escape(str(latest_spot_signal.get("reference_price", "n/a")))}</div>
             <div>5m drift: {html.escape(_format_pct(latest_spot_signal.get("change_5m_pct", "")))}</div>
+            <div>15m drift: {html.escape(_format_pct(latest_spot_signal.get("change_15m_pct", "")))}</div>
             <div>1h drift: {html.escape(_format_pct(latest_spot_signal.get("change_1h_pct", "")))}</div>
+            <div>4h drift: {html.escape(_format_pct(latest_spot_signal.get("change_4h_pct", "")))}</div>
             <div>1h realized vol: {html.escape(_format_pct(latest_spot_signal.get("realized_vol_1h", "")))}</div>
             <div>24h drift: {html.escape(_format_24h_pct(latest_spot_signal.get("price_change_24h_pct", "")))}</div>
             <div>EMA spread: {html.escape(_format_pct(latest_spot_signal.get("ema_spread_pct", "")))}</div>
+            <div>15m EMA spread: {html.escape(_format_pct(latest_spot_signal.get("ema_15m_spread_pct", "")))}</div>
+            <div>1h EMA spread: {html.escape(_format_pct(latest_spot_signal.get("ema_1h_spread_pct", "")))}</div>
             <div>RSI 14: {html.escape(str(latest_spot_signal.get("rsi_14", "n/a")))}</div>
             <div>ATR pct: {html.escape(_format_pct(latest_spot_signal.get("atr_pct", "")))}</div>
             <div>Candle bias: {html.escape(str(latest_spot_signal.get("candle_bias", "n/a")))}</div>
+            <div>Breakout pct: {html.escape(_format_pct(latest_spot_signal.get("breakout_pct", "")))}</div>
+            <div>Setup score: {html.escape(str(latest_spot_signal.get("setup_score", "n/a")))}</div>
             <div>Momentum score: {html.escape(str(latest_spot_signal.get("momentum_score", "n/a")))}</div>
             <div>Rank: {html.escape(str(latest_spot_signal.get("market_cap_rank", "n/a")))}</div>
           </div>
@@ -884,7 +893,7 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
 
         <section class="panel">
           <h2>Why no trade</h2>
-          {_render_rows(summary["recent_blocked_spot"], [("market", "Market"), ("reason", "Reason"), ("momentum", "Momentum"), ("drift_1h", "1h drift"), ("vol_1h", "1h vol")])}
+          {_render_rows(summary["recent_blocked_spot"], [("market", "Market"), ("reason", "Reason"), ("setup_score", "Setup"), ("momentum", "Momentum"), ("drift_15m", "15m drift"), ("drift_1h", "1h drift"), ("vol_1h", "1h vol")])}
         </section>
 
         <section class="panel">

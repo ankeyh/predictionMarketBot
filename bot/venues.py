@@ -421,38 +421,95 @@ class PolymarketVenue(Venue):
 
         hour_response = requests.get(
             f"https://api.exchange.coinbase.com/products/{product}/candles",
-            params={"granularity": 3600, "limit": 2},
+            params={"granularity": 3600, "limit": 48},
             timeout=10,
         )
         hour_response.raise_for_status()
         hour_candles = hour_response.json()
+        hour_ordered = list(reversed(hour_candles))
+        hour_closes = [float(candle[4]) for candle in hour_ordered]
         change_1h_pct = 0.0
-        if len(hour_candles) >= 2:
-            latest_hour_close = float(hour_candles[0][4])
-            prior_hour_close = float(hour_candles[1][4])
+        change_4h_pct = 0.0
+        if len(hour_closes) >= 2:
+            latest_hour_close = hour_closes[-1]
+            prior_hour_close = hour_closes[-2]
             if prior_hour_close:
                 change_1h_pct = (latest_hour_close - prior_hour_close) / prior_hour_close
+        if len(hour_closes) >= 5:
+            prior_4h_close = hour_closes[-5]
+            latest_hour_close = hour_closes[-1]
+            if prior_4h_close:
+                change_4h_pct = (latest_hour_close - prior_4h_close) / prior_4h_close
+
+        quarter_response = requests.get(
+            f"https://api.exchange.coinbase.com/products/{product}/candles",
+            params={"granularity": 900, "limit": 40},
+            timeout=10,
+        )
+        quarter_response.raise_for_status()
+        quarter_candles = quarter_response.json()
+        quarter_ordered = list(reversed(quarter_candles))
+        quarter_closes = [float(candle[4]) for candle in quarter_ordered]
+        change_15m_pct = 0.0
+        if len(quarter_closes) >= 2:
+            latest_15m_close = quarter_closes[-1]
+            prior_15m_close = quarter_closes[-2]
+            if prior_15m_close:
+                change_15m_pct = (latest_15m_close - prior_15m_close) / prior_15m_close
 
         realized_vol_1h = statistics.pstdev(recent_returns) if len(recent_returns) >= 2 else 0.0
         ema_fast = PolymarketVenue._ema(closes, 9)
         ema_slow = PolymarketVenue._ema(closes, 21)
+        ema_15m_fast = PolymarketVenue._ema(quarter_closes, 8)
+        ema_15m_slow = PolymarketVenue._ema(quarter_closes, 21)
+        ema_1h_fast = PolymarketVenue._ema(hour_closes, 4)
+        ema_1h_slow = PolymarketVenue._ema(hour_closes, 9)
         rsi_14 = PolymarketVenue._rsi(closes, 14)
         atr_14 = PolymarketVenue._atr(ordered, 14)
         atr_pct = (atr_14 / spot_price) if spot_price else 0.0
         candle_bias = PolymarketVenue._candle_bias(ordered)
+        breakout_pct = PolymarketVenue._breakout_pct(ordered, 20)
+        setup_score = PolymarketVenue._setup_score(
+            {
+                "change_5m_pct": change_5m_pct,
+                "change_15m_pct": change_15m_pct,
+                "change_1h_pct": change_1h_pct,
+                "change_4h_pct": change_4h_pct,
+                "ema_fast_9": ema_fast,
+                "ema_slow_21": ema_slow,
+                "ema_15m_fast": ema_15m_fast,
+                "ema_15m_slow": ema_15m_slow,
+                "ema_1h_fast": ema_1h_fast,
+                "ema_1h_slow": ema_1h_slow,
+                "rsi_14": rsi_14,
+                "atr_pct": atr_pct,
+                "candle_bias": candle_bias,
+                "breakout_pct": breakout_pct,
+            }
+        )
         return {
             "product": product,
             "spot_price": spot_price,
             "change_5m_pct": change_5m_pct,
+            "change_15m_pct": change_15m_pct,
             "change_1h_pct": change_1h_pct,
+            "change_4h_pct": change_4h_pct,
             "realized_vol_1h": realized_vol_1h,
             "ema_fast_9": ema_fast,
             "ema_slow_21": ema_slow,
             "ema_spread_pct": ((ema_fast - ema_slow) / ema_slow) if ema_slow else 0.0,
+            "ema_15m_fast": ema_15m_fast,
+            "ema_15m_slow": ema_15m_slow,
+            "ema_15m_spread_pct": ((ema_15m_fast - ema_15m_slow) / ema_15m_slow) if ema_15m_slow else 0.0,
+            "ema_1h_fast": ema_1h_fast,
+            "ema_1h_slow": ema_1h_slow,
+            "ema_1h_spread_pct": ((ema_1h_fast - ema_1h_slow) / ema_1h_slow) if ema_1h_slow else 0.0,
             "rsi_14": rsi_14,
             "atr_14": atr_14,
             "atr_pct": atr_pct,
             "candle_bias": candle_bias,
+            "breakout_pct": breakout_pct,
+            "setup_score": setup_score,
         }
 
     @staticmethod
@@ -517,6 +574,44 @@ class PolymarketVenue(Venue):
         if bearish_engulfing:
             bias -= 0.35
         return round(max(-1.0, min(1.0, bias)), 4)
+
+    @staticmethod
+    def _breakout_pct(candles: list[list[float]], lookback: int = 20) -> float:
+        if len(candles) < lookback + 1:
+            return 0.0
+        recent = candles[-(lookback + 1):]
+        latest_close = float(recent[-1][4])
+        prior_high = max(float(candle[2]) for candle in recent[:-1])
+        if prior_high <= 0:
+            return 0.0
+        return round((latest_close - prior_high) / prior_high, 6)
+
+    @staticmethod
+    def _setup_score(values: dict[str, float]) -> float:
+        score = 0.0
+        score += 0.16 if values.get("ema_fast_9", 0.0) > values.get("ema_slow_21", 0.0) else -0.10
+        score += 0.22 if values.get("ema_15m_fast", 0.0) > values.get("ema_15m_slow", 0.0) else -0.12
+        score += 0.28 if values.get("ema_1h_fast", 0.0) > values.get("ema_1h_slow", 0.0) else -0.18
+        score += 0.10 if values.get("change_15m_pct", 0.0) > 0 else -0.06
+        score += 0.14 if values.get("change_1h_pct", 0.0) > 0 else -0.10
+        score += 0.10 if values.get("change_4h_pct", 0.0) > 0 else -0.08
+        breakout_pct = values.get("breakout_pct", 0.0)
+        if breakout_pct > 0:
+            score += min(0.18, breakout_pct * 12)
+        elif breakout_pct < -0.01:
+            score -= 0.10
+        rsi = values.get("rsi_14", 50.0)
+        if 48 <= rsi <= 66:
+            score += 0.10
+        elif rsi > 74 or rsi < 34:
+            score -= 0.10
+        atr_pct = values.get("atr_pct", 0.0)
+        if 0.004 <= atr_pct <= 0.025:
+            score += 0.06
+        elif atr_pct > 0.04:
+            score -= 0.08
+        score += max(-0.14, min(0.14, values.get("candle_bias", 0.0) * 0.25))
+        return round(max(-1.0, min(1.0, score)), 4)
 
     @staticmethod
     def _days_to_close(end_date_iso: str | None) -> float | None:
@@ -679,13 +774,19 @@ class AlpacaVenue(Venue):
                         "spot_price": float(context.get("spot_price", 0.0) or 0.0),
                         "product": product,
                         "change_1h_pct": float(context.get("change_1h_pct", 0.0) or 0.0),
+                        "change_15m_pct": float(context.get("change_15m_pct", 0.0) or 0.0),
+                        "change_4h_pct": float(context.get("change_4h_pct", 0.0) or 0.0),
                         "realized_vol_1h": float(context.get("realized_vol_1h", 0.0) or 0.0),
                         "ema_fast_9": float(context.get("ema_fast_9", 0.0) or 0.0),
                         "ema_slow_21": float(context.get("ema_slow_21", 0.0) or 0.0),
                         "ema_spread_pct": float(context.get("ema_spread_pct", 0.0) or 0.0),
+                        "ema_15m_spread_pct": float(context.get("ema_15m_spread_pct", 0.0) or 0.0),
+                        "ema_1h_spread_pct": float(context.get("ema_1h_spread_pct", 0.0) or 0.0),
                         "rsi_14": float(context.get("rsi_14", 50.0) or 50.0),
                         "atr_pct": float(context.get("atr_pct", 0.0) or 0.0),
                         "candle_bias": float(context.get("candle_bias", 0.0) or 0.0),
+                        "breakout_pct": float(context.get("breakout_pct", 0.0) or 0.0),
+                        "setup_score": float(context.get("setup_score", 0.0) or 0.0),
                         "price_change_24h_pct": discovery.get("price_change_percentage_24h"),
                         "market_cap_rank": discovery.get("market_cap_rank"),
                         "momentum_score": momentum_score,

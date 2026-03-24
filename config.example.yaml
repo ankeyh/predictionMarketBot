@@ -113,7 +113,7 @@ execution:
 
 risk:
   starting_cash: 250.0
-  max_open_positions: 2
+  max_open_positions: 4
   max_single_position_notional: 25.0
   daily_loss_limit: 30.0
 

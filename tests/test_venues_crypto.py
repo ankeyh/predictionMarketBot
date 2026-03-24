@@ -113,3 +113,24 @@ def test_reference_context_indicators_compute_from_candles():
     assert rsi > 50
     assert atr > 0
     assert -1.0 <= bias <= 1.0
+
+
+def test_setup_score_rewards_aligned_multitimeframe_structure():
+    score = PolymarketVenue._setup_score(
+        {
+            "ema_fast_9": 110.0,
+            "ema_slow_21": 108.0,
+            "ema_15m_fast": 111.0,
+            "ema_15m_slow": 109.0,
+            "ema_1h_fast": 113.0,
+            "ema_1h_slow": 110.0,
+            "change_15m_pct": 0.003,
+            "change_1h_pct": 0.008,
+            "change_4h_pct": 0.015,
+            "rsi_14": 58.0,
+            "atr_pct": 0.012,
+            "candle_bias": 0.35,
+            "breakout_pct": 0.004,
+        }
+    )
+    assert score > 0.3

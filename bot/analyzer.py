@@ -21,37 +21,54 @@ class CandleAnalyzer(Analyzer):
             return MockAnalyzer().analyze(snapshot)
 
         extra = snapshot.extra
+        setup_score = float(extra.get("setup_score", 0.0) or 0.0)
         ema_spread = float(extra.get("ema_spread_pct", 0.0) or 0.0)
+        ema_15m_spread = float(extra.get("ema_15m_spread_pct", 0.0) or 0.0)
+        ema_1h_spread = float(extra.get("ema_1h_spread_pct", 0.0) or 0.0)
         rsi = float(extra.get("rsi_14", 50.0) or 50.0)
         atr_pct = float(extra.get("atr_pct", 0.0) or 0.0)
         candle_bias = float(extra.get("candle_bias", 0.0) or 0.0)
+        breakout_pct = float(extra.get("breakout_pct", 0.0) or 0.0)
         drift_5m = float(snapshot.change_5m_pct or 0.0)
+        drift_15m = float(extra.get("change_15m_pct", 0.0) or 0.0)
         drift_1h = float(extra.get("change_1h_pct", 0.0) or 0.0)
+        drift_4h = float(extra.get("change_4h_pct", 0.0) or 0.0)
         drift_24h = float(extra.get("price_change_24h_pct", 0.0) or 0.0) / 100.0
         spot_price = float(snapshot.reference_price or 0.0)
         ema_fast = float(extra.get("ema_fast_9", 0.0) or 0.0)
 
-        trend_score = 0.0
+        trend_score = setup_score * 0.65
         if ema_spread > 0:
-            trend_score += 0.28
+            trend_score += 0.10
         elif ema_spread < 0:
-            trend_score -= 0.28
-        if spot_price and ema_fast and spot_price > ema_fast:
-            trend_score += 0.18
-        elif spot_price and ema_fast:
-            trend_score -= 0.18
-        trend_score += 0.18 if drift_1h > 0 else -0.18
-        trend_score += 0.08 if drift_5m > 0 else -0.08
-        trend_score += max(-0.16, min(0.16, candle_bias * 0.22))
-        trend_score += max(-0.12, min(0.12, drift_24h * 1.4))
-        if 48 <= rsi <= 66:
-            trend_score += 0.12
-        elif rsi > 74 or rsi < 32:
-            trend_score -= 0.12
-        if atr_pct > 0.03:
             trend_score -= 0.10
+        if ema_15m_spread > 0:
+            trend_score += 0.12
+        elif ema_15m_spread < 0:
+            trend_score -= 0.10
+        if ema_1h_spread > 0:
+            trend_score += 0.15
+        elif ema_1h_spread < 0:
+            trend_score -= 0.14
+        if spot_price and ema_fast and spot_price > ema_fast:
+            trend_score += 0.10
+        elif spot_price and ema_fast:
+            trend_score -= 0.10
+        trend_score += 0.06 if drift_15m > 0 else -0.05
+        trend_score += 0.10 if drift_1h > 0 else -0.08
+        trend_score += 0.10 if drift_4h > 0 else -0.08
+        trend_score += 0.04 if drift_5m > 0 else -0.03
+        trend_score += max(-0.10, min(0.10, breakout_pct * 10))
+        trend_score += max(-0.12, min(0.12, candle_bias * 0.18))
+        trend_score += max(-0.08, min(0.08, drift_24h * 0.8))
+        if 48 <= rsi <= 66:
+            trend_score += 0.08
+        elif rsi > 74 or rsi < 32:
+            trend_score -= 0.08
+        if atr_pct > 0.03:
+            trend_score -= 0.08
         elif 0.004 <= atr_pct <= 0.02:
-            trend_score += 0.06
+            trend_score += 0.05
 
         probability = max(0.05, min(0.95, 0.5 + (trend_score * 0.45)))
         edge = max(0.0, min(0.45, abs(probability - 0.5) * 1.8))
@@ -59,20 +76,28 @@ class CandleAnalyzer(Analyzer):
             1
             for condition in [
                 ema_spread > 0,
+                ema_15m_spread > 0,
+                ema_1h_spread > 0,
                 spot_price > ema_fast if spot_price and ema_fast else False,
+                drift_15m > 0,
                 drift_1h > 0,
+                drift_4h > 0,
                 drift_5m > 0,
+                breakout_pct > -0.002,
                 candle_bias > 0,
                 48 <= rsi <= 66,
             ]
             if condition
         )
         confidence = max(0.1, min(0.85, 0.2 + (positive_signals * 0.09) + min(0.2, abs(trend_score) * 0.25)))
-        recommendation = "BUY_YES" if trend_score >= 0.22 else "HOLD"
+        aligned_trend = ema_15m_spread > 0 and ema_1h_spread > 0 and drift_1h > 0
+        trigger_ready = breakout_pct > -0.004 and candle_bias > -0.10 and 42 <= rsi <= 70
+        recommendation = "BUY_YES" if trend_score >= 0.26 and setup_score >= 0.22 and aligned_trend and trigger_ready else "HOLD"
         reasoning = (
             f"Candle strategy on {snapshot.reference_symbol}: "
-            f"EMA spread {ema_spread:+.2%}, RSI14 {rsi:.1f}, ATR {atr_pct:.2%}, "
-            f"5m drift {drift_5m:+.2%}, 1h drift {drift_1h:+.2%}, candle bias {candle_bias:+.2f}. "
+            f"setup score {setup_score:+.2f}, EMA spread {ema_spread:+.2%}, 15m EMA {ema_15m_spread:+.2%}, "
+            f"1h EMA {ema_1h_spread:+.2%}, RSI14 {rsi:.1f}, ATR {atr_pct:.2%}, breakout {breakout_pct:+.2%}, "
+            f"15m drift {drift_15m:+.2%}, 1h drift {drift_1h:+.2%}, 4h drift {drift_4h:+.2%}, candle bias {candle_bias:+.2f}. "
             f"Trend score {trend_score:+.2f}."
         )
         return AnalysisResult(
