@@ -124,20 +124,29 @@ def _spot_guardrail(snapshot, cfg: dict) -> str:
 
     momentum_score = float(snapshot.extra.get("momentum_score", 0.0) or 0.0)
     setup_score = float(snapshot.extra.get("setup_score", 0.0) or 0.0)
+    bearish_setup = setup_score < 0 or momentum_score < 0
     score_basis = abs(setup_score) if snapshot.extra.get("setup_score") not in ("", None) else abs(momentum_score)
     change_5m = float(snapshot.change_5m_pct or 0.0)
     change_1h = float(snapshot.extra.get("change_1h_pct", 0.0) or 0.0)
     realized_vol = float(snapshot.extra.get("realized_vol_1h", 0.0) or 0.0)
+    min_score = float(guard.get("min_momentum_score", 0.0) or 0.0)
+    min_change_1h = float(guard.get("min_change_1h_pct", 0.0) or 0.0)
+    min_vol_1h = float(guard.get("min_realized_vol_1h", 0.0) or 0.0)
 
-    if score_basis < float(guard.get("min_momentum_score", 0.0) or 0.0):
+    if bearish_setup:
+        min_score = max(0.12, min_score - 0.05)
+        min_change_1h = max(0.0, min_change_1h - 0.0002)
+        min_vol_1h = max(0.0003, min_vol_1h - 0.00015)
+
+    if score_basis < min_score:
         return "setup score below threshold"
-    if abs(change_1h) < float(guard.get("min_change_1h_pct", 0.0) or 0.0):
+    if abs(change_1h) < min_change_1h:
         return "1h drift below threshold"
-    if realized_vol < float(guard.get("min_realized_vol_1h", 0.0) or 0.0):
+    if realized_vol < min_vol_1h:
         return "volatility too low"
     if realized_vol > float(guard.get("max_realized_vol_1h", 1.0) or 1.0):
         return "volatility too high"
-    if guard.get("require_drift_alignment", True) and change_5m * change_1h < 0:
+    if guard.get("require_drift_alignment", True) and not bearish_setup and change_5m * change_1h < 0:
         return "5m and 1h drift conflict"
     return ""
 
