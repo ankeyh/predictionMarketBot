@@ -227,6 +227,16 @@ def test_dashboard_html_contains_heading():
             "open_positions": [],
             "recent_settlements": [],
             "recent_blocked_spot": [],
+            "top_setups": [
+                {
+                    "market": "BTC-USD candlestick setup (2h)",
+                    "recommendation": "BUY_YES",
+                    "setup_score": 0.44,
+                    "momentum_score": 0.42,
+                    "confidence": 0.62,
+                    "edge": 0.21,
+                }
+            ],
             "adaptive": {
                 "mode": "more_active",
                 "level": 1,
@@ -260,3 +270,4 @@ def test_dashboard_html_contains_heading():
     assert "Adaptive engine" in html
     assert "RSI 14" in html
     assert "Candle setup score" in html
+    assert "Top setups right now" in html

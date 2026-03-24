@@ -92,7 +92,14 @@ class CandleAnalyzer(Analyzer):
         confidence = max(0.1, min(0.85, 0.2 + (positive_signals * 0.09) + min(0.2, abs(trend_score) * 0.25)))
         aligned_trend = ema_15m_spread > 0 and ema_1h_spread > 0 and drift_1h > 0
         trigger_ready = breakout_pct > -0.004 and candle_bias > -0.10 and 42 <= rsi <= 70
-        recommendation = "BUY_YES" if trend_score >= 0.26 and setup_score >= 0.22 and aligned_trend and trigger_ready else "HOLD"
+        bearish_trend = ema_15m_spread < 0 and ema_1h_spread < 0 and drift_1h < 0
+        bearish_trigger = breakout_pct < 0.002 and candle_bias < 0.12 and 30 <= rsi <= 58
+        if trend_score >= 0.22 and setup_score >= 0.18 and aligned_trend and trigger_ready:
+            recommendation = "BUY_YES"
+        elif trend_score <= -0.22 and setup_score <= -0.18 and bearish_trend and bearish_trigger:
+            recommendation = "BUY_NO"
+        else:
+            recommendation = "HOLD"
         reasoning = (
             f"Candle strategy on {snapshot.reference_symbol}: "
             f"setup score {setup_score:+.2f}, EMA spread {ema_spread:+.2%}, 15m EMA {ema_15m_spread:+.2%}, "

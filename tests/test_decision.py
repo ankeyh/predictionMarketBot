@@ -84,5 +84,39 @@ def test_crypto_spot_order_created_as_buy():
     order = derive_order(snapshot, analysis, cfg)
 
     assert order is not None
+    assert order.market_type == "crypto_spot"
     assert order.side == "BUY"
     assert order.price == 85000.0
+
+
+def test_crypto_spot_order_created_as_sell_for_bearish_setup():
+    cfg = {
+        "venue": {
+            "min_edge": 0.10,
+            "min_confidence": 0.70,
+            "paper_overrides": {"crypto_spot": {"min_edge": 0.025, "min_confidence": 0.28}},
+        },
+        "execution": {"max_order_notional": 25.0, "mode": "paper"},
+        "risk": {"max_single_position_notional": 25.0},
+    }
+    snapshot = MarketSnapshot(
+        market_id="ETH/USD",
+        market_type="crypto_spot",
+        question="ETH-USD candlestick setup (2h)",
+        yes_price=0.5,
+        no_price=0.5,
+        reference_symbol="ETHUSD",
+        reference_price=2200.0,
+    )
+    analysis = AnalysisResult(
+        probability=0.34,
+        edge=0.18,
+        recommendation="BUY_NO",
+        confidence=0.55,
+        reasoning="Bearish candle structure.",
+    )
+
+    order = derive_order(snapshot, analysis, cfg)
+
+    assert order is not None
+    assert order.side == "SELL"

@@ -123,13 +123,15 @@ def _spot_guardrail(snapshot, cfg: dict) -> str:
         return ""
 
     momentum_score = float(snapshot.extra.get("momentum_score", 0.0) or 0.0)
+    setup_score = float(snapshot.extra.get("setup_score", 0.0) or 0.0)
+    score_basis = abs(setup_score) if snapshot.extra.get("setup_score") not in ("", None) else abs(momentum_score)
     change_5m = float(snapshot.change_5m_pct or 0.0)
     change_1h = float(snapshot.extra.get("change_1h_pct", 0.0) or 0.0)
     realized_vol = float(snapshot.extra.get("realized_vol_1h", 0.0) or 0.0)
 
-    if momentum_score < float(guard.get("min_momentum_score", 0.0) or 0.0):
-        return "momentum below threshold"
-    if change_1h < float(guard.get("min_change_1h_pct", 0.0) or 0.0):
+    if score_basis < float(guard.get("min_momentum_score", 0.0) or 0.0):
+        return "setup score below threshold"
+    if abs(change_1h) < float(guard.get("min_change_1h_pct", 0.0) or 0.0):
         return "1h drift below threshold"
     if realized_vol < float(guard.get("min_realized_vol_1h", 0.0) or 0.0):
         return "volatility too low"
@@ -199,6 +201,7 @@ def process_once(root: Path, cfg: dict) -> int:
     analyses = {}
     signal_count = 0
     blocked_spot_rows = []
+    latest_setups = []
 
     for snapshot in markets:
         blocked_reason = _spot_guardrail(snapshot, effective_cfg)
@@ -220,6 +223,18 @@ def process_once(root: Path, cfg: dict) -> int:
                 "momentum_score": snapshot.extra.get("momentum_score", ""),
             }
             blocked_spot_rows.append(blocked_row)
+            latest_setups.append(
+                {
+                    "market": snapshot.question,
+                    "symbol": snapshot.market_id,
+                    "recommendation": "BLOCKED",
+                    "reason": blocked_reason,
+                    "setup_score": snapshot.extra.get("setup_score", ""),
+                    "momentum_score": snapshot.extra.get("momentum_score", ""),
+                    "confidence": "",
+                    "edge": "",
+                }
+            )
             append_csv(
                 data_dir / "blocked_spot.csv",
                 blocked_row,
@@ -304,6 +319,18 @@ def process_once(root: Path, cfg: dict) -> int:
                 "momentum_score",
                 "reasoning",
             ],
+        )
+        latest_setups.append(
+            {
+                "market": snapshot.question,
+                "symbol": snapshot.market_id,
+                "recommendation": analysis.recommendation,
+                "reason": analysis.reasoning,
+                "setup_score": snapshot.extra.get("setup_score", ""),
+                "momentum_score": snapshot.extra.get("momentum_score", ""),
+                "confidence": round(analysis.confidence, 4),
+                "edge": round(analysis.edge, 4),
+            }
         )
 
         if analysis.recommendation != "HOLD":
@@ -394,6 +421,19 @@ def process_once(root: Path, cfg: dict) -> int:
             f"Status: {fill.status}"
         )
 
+    latest_setups.sort(
+        key=lambda row: (
+            -float(row.get("setup_score") or 0.0),
+            -float(row.get("confidence") or 0.0),
+        )
+    )
+    save_json(
+        data_dir / "latest_setups.json",
+        {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "rows": latest_setups[:12],
+        },
+    )
     updated_profile = _adaptive_spot_profile(data_dir, effective_cfg)
     payload = {
         "ts": datetime.now(timezone.utc).isoformat(),

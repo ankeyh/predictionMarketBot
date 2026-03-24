@@ -71,3 +71,37 @@ def test_candle_analyzer_holds_weak_setup():
     result = analyzer.analyze(snapshot)
 
     assert result.recommendation == "HOLD"
+
+
+def test_candle_analyzer_creates_bearish_signal_for_short_setup():
+    analyzer = CandleAnalyzer()
+    snapshot = MarketSnapshot(
+        market_id="SOL/USD",
+        market_type="crypto_spot",
+        question="SOL-USD candlestick setup (2h)",
+        yes_price=0.5,
+        no_price=0.5,
+        reference_symbol="SOLUSD",
+        reference_price=90.0,
+        change_5m_pct=-0.004,
+        extra={
+            "setup_score": -0.46,
+            "change_1h_pct": -0.012,
+            "change_15m_pct": -0.006,
+            "change_4h_pct": -0.021,
+            "price_change_24h_pct": -5.5,
+            "ema_fast_9": 89.4,
+            "ema_slow_21": 90.8,
+            "ema_spread_pct": -0.015,
+            "ema_15m_spread_pct": -0.011,
+            "ema_1h_spread_pct": -0.019,
+            "rsi_14": 44.0,
+            "atr_pct": 0.011,
+            "candle_bias": -0.42,
+            "breakout_pct": -0.006,
+        },
+    )
+
+    result = analyzer.analyze(snapshot)
+
+    assert result.recommendation == "BUY_NO"

@@ -21,11 +21,13 @@ class PaperBroker:
                 "positions": [],
                 "closed_positions": [],
                 "last_order_at": {},
+                "last_stop_loss_at": {},
             },
         )
         self.state.setdefault("positions", [])
         self.state.setdefault("closed_positions", [])
         self.state.setdefault("last_order_at", {})
+        self.state.setdefault("last_stop_loss_at", {})
         self.state.setdefault("cash", cfg["risk"]["starting_cash"])
         self.state.setdefault("daily_notional", 0.0)
         self.state.setdefault("realized_pnl", 0.0)
@@ -58,6 +60,14 @@ class PaperBroker:
             for position in self.state["positions"]:
                 if position["market_id"] == intent.market_id and position["side"] == intent.side:
                     return False, "existing position already open"
+
+        stop_loss_cooldown_minutes = int(self.cfg["execution"].get("stop_loss_cooldown_minutes", 0) or 0)
+        if stop_loss_cooldown_minutes > 0:
+            last_stop_loss_at = self.state.get("last_stop_loss_at", {}).get(intent.market_id)
+            if last_stop_loss_at:
+                next_allowed = datetime.fromisoformat(last_stop_loss_at) + timedelta(minutes=stop_loss_cooldown_minutes)
+                if datetime.now(timezone.utc) < next_allowed:
+                    return False, "symbol stop-loss cooldown active"
 
         cooldown_minutes = int(self.cfg["execution"]["cooldown_minutes"])
         last_order_at = self.state.get("last_order_at", {}).get(intent.market_id)
@@ -190,6 +200,8 @@ class PaperBroker:
             self.state["cash"] += proceeds
             self.state["realized_pnl"] += pnl
             self.state.setdefault("last_order_at", {})[position["market_id"]] = utc_now_iso()
+            if reason == "stop_loss":
+                self.state.setdefault("last_stop_loss_at", {})[position["market_id"]] = utc_now_iso()
             self.state["closed_positions"].append(closed_row)
             closed.append(closed_row)
 
@@ -223,6 +235,11 @@ class PaperBroker:
                 return "opposite_signal"
             if position.get("side") == "NO" and analysis.recommendation == "BUY_YES":
                 return "opposite_signal"
+            if snapshot.market_type == "crypto_spot":
+                if position.get("side") == "BUY" and analysis.recommendation == "BUY_NO":
+                    return "opposite_signal"
+                if position.get("side") == "SELL" and analysis.recommendation == "BUY_YES":
+                    return "opposite_signal"
 
         if max_hold_minutes > 0:
             opened_at = position.get("ts", "")

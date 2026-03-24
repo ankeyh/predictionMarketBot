@@ -6,8 +6,8 @@ venue:
   min_confidence: 0.70
   paper_overrides:
     crypto_spot:
-      min_edge: 0.03
-      min_confidence: 0.30
+      min_edge: 0.025
+      min_confidence: 0.28
     crypto_price:
       min_edge: 0.03
       min_confidence: 0.25
@@ -82,6 +82,7 @@ execution:
   max_order_notional: 25.0
   max_daily_notional: 100.0
   cooldown_minutes: 15
+  stop_loss_cooldown_minutes: 90
   allow_repeat_market_orders: false
   adaptive_spot:
     enabled: true

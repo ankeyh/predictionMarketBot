@@ -21,6 +21,7 @@ def test_paper_broker_applies_fill(tmp_path: Path):
     broker = PaperBroker(cfg, tmp_path)
     intent = OrderIntent(
         market_id="btc-5m-up",
+        market_type="crypto_price",
         side="YES",
         price=0.5,
         size=20.0,
@@ -79,6 +80,7 @@ def test_paper_broker_rejects_repeat_market_order(tmp_path: Path):
 
     intent = OrderIntent(
         market_id="btc-5m-up",
+        market_type="crypto_price",
         side="YES",
         price=0.5,
         size=20.0,
@@ -123,6 +125,7 @@ def test_paper_broker_allows_distinct_spot_positions_until_portfolio_limit(tmp_p
 
     intent = OrderIntent(
         market_id="ETH/USD",
+        market_type="crypto_spot",
         side="BUY",
         price=50.0,
         size=1.0,
@@ -135,6 +138,79 @@ def test_paper_broker_allows_distinct_spot_positions_until_portfolio_limit(tmp_p
     allowed, reason = broker.can_place(intent)
     assert allowed is True
     assert reason == ""
+
+
+def test_paper_broker_applies_stop_loss_symbol_cooldown(tmp_path: Path):
+    cfg = {
+        "risk": {
+            "starting_cash": 500.0,
+            "max_open_positions": 4,
+            "max_single_position_notional": 100.0,
+            "daily_loss_limit": 50.0,
+        },
+        "execution": {
+            "max_daily_notional": 300.0,
+            "cooldown_minutes": 15,
+            "stop_loss_cooldown_minutes": 90,
+            "allow_repeat_market_orders": False,
+            "paper_exit_rules": {
+                "crypto_spot": {
+                    "take_profit_pct": 0.04,
+                    "stop_loss_pct": 0.02,
+                    "max_hold_minutes": 0,
+                    "exit_on_opposite_signal": False,
+                    "min_exit_confidence": 0.0,
+                }
+            },
+        },
+    }
+    broker = PaperBroker(cfg, tmp_path)
+    broker.apply_fill(
+        Fill(
+            market_id="BTC/USD",
+            market_type="alpaca",
+            side="BUY",
+            price=100.0,
+            size=1.0,
+            notional=100.0,
+            status="paper-alpaca-sim",
+            ts="2026-03-20T12:00:00+00:00",
+            question="BTC-USD candlestick setup (2h)",
+        )
+    )
+    broker.close_positions(
+        {
+            "BTC/USD": type(
+                "Snap",
+                (),
+                {
+                    "market_id": "BTC/USD",
+                    "market_type": "crypto_spot",
+                    "question": "BTC-USD candlestick setup (2h)",
+                    "reference_price": 97.0,
+                    "extra": {"spot_price": 97.0},
+                },
+            )()
+        },
+        {},
+        cfg,
+    )
+
+    intent = OrderIntent(
+        market_id="BTC/USD",
+        market_type="crypto_spot",
+        side="BUY",
+        price=97.0,
+        size=1.0,
+        probability=0.7,
+        edge=0.2,
+        confidence=0.8,
+        reasoning="Retry too soon",
+    )
+
+    allowed, reason = broker.can_place(intent)
+    assert allowed is False
+    assert reason == "symbol stop-loss cooldown active"
 
 
 class _ResolvedVenue:

@@ -36,6 +36,7 @@ class AnalysisResult:
 @dataclass
 class OrderIntent:
     market_id: str
+    market_type: str
     side: str
     price: float
     size: float

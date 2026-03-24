@@ -29,10 +29,13 @@ def derive_order(snapshot: MarketSnapshot, analysis: AnalysisResult, cfg: dict) 
     notional = max_notional * min(1.0, confidence_scale * edge_scale * 2)
 
     if snapshot.market_type == "crypto_spot":
-        if analysis.recommendation != "BUY_YES":
+        if analysis.recommendation == "BUY_YES":
+            side = "BUY"
+        elif analysis.recommendation == "BUY_NO":
+            side = "SELL"
+        else:
             return None
         price = snapshot.reference_price or snapshot.extra.get("spot_price") or 0.0
-        side = "BUY"
     elif analysis.recommendation == "BUY_YES":
         price = snapshot.yes_price
         side = "YES"
@@ -51,6 +54,7 @@ def derive_order(snapshot: MarketSnapshot, analysis: AnalysisResult, cfg: dict) 
 
     return OrderIntent(
         market_id=snapshot.market_id,
+        market_type=snapshot.market_type,
         side=side,
         price=price,
         size=size,

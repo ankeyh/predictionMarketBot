@@ -155,6 +155,7 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             "effective_override": {},
         },
     )
+    latest_setups = load_json(data_dir / "latest_setups.json", {"rows": []})
     state = load_json(
         data_dir / "state.json",
         {
@@ -325,6 +326,7 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
         "open_positions": open_positions,
         "recent_settlements": recent_settlements,
         "recent_blocked_spot": recent_blocked_spot,
+        "top_setups": latest_setups.get("rows", []),
         "adaptive": adaptive,
         "discord": {
             "channel_url": os.getenv("DISCORD_CHANNEL_URL", ""),
@@ -855,6 +857,11 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
         <section class="panel">
           <h2>Recent signals</h2>
           {_render_rows(summary["recent_signals"], [("question", "Market"), ("recommendation", "Rec"), ("edge", "Edge"), ("confidence", "Conf"), ("probability", "Prob")])}
+        </section>
+
+        <section class="panel">
+          <h2>Top setups right now</h2>
+          {_render_rows(summary["top_setups"], [("market", "Market"), ("recommendation", "Rec"), ("setup_score", "Setup"), ("momentum_score", "Momentum"), ("confidence", "Conf"), ("edge", "Edge")])}
         </section>
 
         <section class="panel">
