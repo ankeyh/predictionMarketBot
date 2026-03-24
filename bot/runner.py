@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,8 +15,104 @@ from .decision import derive_order
 from .discord_router import parse_discord_command
 from .kalshi_check import check_kalshi, format_check
 from .paper import PaperBroker
-from .storage import append_csv, ensure_dir, save_json
+from .storage import append_csv, ensure_dir, load_json, save_json
 from .venues import build_venue
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _adaptive_spot_profile(data_dir: Path, cfg: dict) -> dict:
+    adaptive_cfg = cfg.get("execution", {}).get("adaptive_spot", {})
+    enabled = adaptive_cfg.get("enabled", True)
+    base_guard = copy.deepcopy(cfg.get("execution", {}).get("spot_guardrail", {}))
+    base_override = copy.deepcopy(cfg.get("venue", {}).get("paper_overrides", {}).get("crypto_spot", {}))
+    profile = {
+        "enabled": enabled,
+        "mode": "neutral",
+        "level": 0,
+        "reasons": [],
+        "recent_blocked": 0,
+        "recent_losses": 0,
+        "recent_closed": 0,
+        "effective_guardrail": base_guard,
+        "effective_override": base_override,
+    }
+    if not enabled:
+        return profile
+
+    blocked_rows = _load_json_rows(data_dir / "blocked_spot.csv")
+    recent_window = int(adaptive_cfg.get("recent_window", 12) or 12)
+    recent_blocked = blocked_rows[-recent_window:]
+    state = load_json(data_dir / "state.json", {"closed_positions": []})
+    recent_closed = state.get("closed_positions", [])[-recent_window:]
+    recent_losses = [row for row in recent_closed if float(row.get("pnl", 0.0) or 0.0) <= 0]
+    stop_losses = [row for row in recent_closed if row.get("close_reason") == "stop_loss"]
+    drift_conflicts = [row for row in recent_blocked if "drift conflict" in str(row.get("reason", ""))]
+
+    relax_score = 0
+    if len(recent_blocked) >= int(adaptive_cfg.get("min_blocked_to_relax", 6) or 6):
+        relax_score += 1
+    if len(recent_blocked) >= int(adaptive_cfg.get("strong_blocked_to_relax", 10) or 10):
+        relax_score += 1
+
+    tighten_score = 0
+    if len(recent_losses) >= int(adaptive_cfg.get("losses_to_tighten", 2) or 2):
+        tighten_score += 1
+    if len(stop_losses) >= int(adaptive_cfg.get("stop_losses_to_tighten", 2) or 2):
+        tighten_score += 1
+
+    level = relax_score - tighten_score
+    profile["recent_blocked"] = len(recent_blocked)
+    profile["recent_losses"] = len(recent_losses)
+    profile["recent_closed"] = len(recent_closed)
+    profile["level"] = level
+
+    effective_guard = copy.deepcopy(base_guard)
+    effective_override = copy.deepcopy(base_override)
+    if level > 0:
+        profile["mode"] = "more_active"
+        profile["reasons"].append(f"relaxed after {len(recent_blocked)} blocked spot setups")
+        effective_guard["min_momentum_score"] = round(
+            _clamp(float(base_guard.get("min_momentum_score", 0.25)) - (0.06 * level), 0.10, 0.60), 4
+        )
+        effective_guard["min_change_1h_pct"] = round(
+            _clamp(float(base_guard.get("min_change_1h_pct", 0.0005)) - (0.00025 * level), 0.0, 0.01), 6
+        )
+        effective_guard["min_realized_vol_1h"] = round(
+            _clamp(float(base_guard.get("min_realized_vol_1h", 0.0007)) - (0.0002 * level), 0.0002, 0.05), 6
+        )
+        effective_override["min_confidence"] = round(
+            _clamp(float(base_override.get("min_confidence", 0.30)) - (0.04 * level), 0.20, 0.70), 4
+        )
+        effective_override["min_edge"] = round(
+            _clamp(float(base_override.get("min_edge", 0.03)) - (0.008 * level), 0.015, 0.20), 4
+        )
+        if len(drift_conflicts) >= max(1, len(recent_blocked) // 2):
+            effective_guard["require_drift_alignment"] = False
+            profile["reasons"].append("temporarily ignoring drift-alignment conflicts")
+    elif level < 0:
+        profile["mode"] = "more_cautious"
+        profile["reasons"].append(f"tightened after {len(recent_losses)} recent losing closes")
+        tighten = abs(level)
+        effective_guard["min_momentum_score"] = round(
+            _clamp(float(base_guard.get("min_momentum_score", 0.25)) + (0.05 * tighten), 0.10, 0.80), 4
+        )
+        effective_guard["min_change_1h_pct"] = round(
+            _clamp(float(base_guard.get("min_change_1h_pct", 0.0005)) + (0.00025 * tighten), 0.0, 0.01), 6
+        )
+        effective_override["min_confidence"] = round(
+            _clamp(float(base_override.get("min_confidence", 0.30)) + (0.03 * tighten), 0.20, 0.80), 4
+        )
+        effective_override["min_edge"] = round(
+            _clamp(float(base_override.get("min_edge", 0.03)) + (0.008 * tighten), 0.015, 0.25), 4
+        )
+
+    profile["effective_guardrail"] = effective_guard
+    profile["effective_override"] = effective_override
+    save_json(data_dir / "adaptive_profile.json", profile)
+    return profile
 
 
 def _spot_guardrail(snapshot, cfg: dict) -> str:
@@ -46,6 +143,10 @@ def _spot_guardrail(snapshot, cfg: dict) -> str:
 def process_once(root: Path, cfg: dict) -> int:
     data_dir = root / cfg["telemetry"]["data_dir"]
     ensure_dir(data_dir)
+    effective_cfg = copy.deepcopy(cfg)
+    adaptive_profile = _adaptive_spot_profile(data_dir, effective_cfg)
+    effective_cfg.setdefault("execution", {})["spot_guardrail"] = adaptive_profile["effective_guardrail"]
+    effective_cfg.setdefault("venue", {}).setdefault("paper_overrides", {})["crypto_spot"] = adaptive_profile["effective_override"]
     control = load_control_state(data_dir)
     if control["paused"]:
         print(
@@ -59,9 +160,9 @@ def process_once(root: Path, cfg: dict) -> int:
         )
         return 0
 
-    venue = build_venue(cfg)
-    analyzer = build_analyzer(cfg, root)
-    broker = PaperBroker(cfg, data_dir)
+    venue = build_venue(effective_cfg)
+    analyzer = build_analyzer(effective_cfg, root)
+    broker = PaperBroker(effective_cfg, data_dir)
     broker.reset_day_if_needed()
     broker.hydrate_positions(venue)
     settled_positions = broker.settle_positions(venue)
@@ -93,14 +194,14 @@ def process_once(root: Path, cfg: dict) -> int:
             f"PnL: {closed['pnl']:.2f}"
         )
 
-    markets = venue.load_markets(cfg)
+    markets = venue.load_markets(effective_cfg)
     snapshot_by_id = {snapshot.market_id: snapshot for snapshot in markets}
     analyses = {}
     signal_count = 0
     blocked_spot_rows = []
 
     for snapshot in markets:
-        blocked_reason = _spot_guardrail(snapshot, cfg)
+        blocked_reason = _spot_guardrail(snapshot, effective_cfg)
         if blocked_reason:
             blocked_row = {
                 "ts": datetime.now(timezone.utc).isoformat(),
@@ -188,7 +289,7 @@ def process_once(root: Path, cfg: dict) -> int:
                 f"Reason: {analysis.reasoning}"
             )
 
-    closed_positions = broker.close_positions(snapshot_by_id, analyses, cfg)
+    closed_positions = broker.close_positions(snapshot_by_id, analyses, effective_cfg)
     for closed in closed_positions:
         append_csv(
             data_dir / "closures.csv",
@@ -227,14 +328,14 @@ def process_once(root: Path, cfg: dict) -> int:
         analysis = analyses.get(snapshot.market_id)
         if not analysis:
             continue
-        order = derive_order(snapshot, analysis, cfg)
-        if not order or not cfg["execution"]["enabled"]:
+        order = derive_order(snapshot, analysis, effective_cfg)
+        if not order or not effective_cfg["execution"]["enabled"]:
             continue
 
         signal_count += 1
         allowed, reason = broker.can_place(order)
         if allowed:
-            fill = venue.execute(order, cfg["execution"]["mode"])
+            fill = venue.execute(order, effective_cfg["execution"]["mode"])
             fill.market_type = snapshot.market_type
             fill.question = snapshot.question
             fill.market_slug = str(snapshot.extra.get("slug", ""))
@@ -267,12 +368,15 @@ def process_once(root: Path, cfg: dict) -> int:
             f"Status: {fill.status}"
         )
 
+    updated_profile = _adaptive_spot_profile(data_dir, effective_cfg)
     payload = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "status": "completed",
         "markets_scanned": len(markets),
         "signals_emitted": signal_count,
         "blocked_spot_markets": len(blocked_spot_rows),
+        "adaptive_mode": updated_profile["mode"],
+        "adaptive_level": updated_profile["level"],
     }
     save_json(data_dir / "last_scan.json", payload)
     print(json.dumps(payload))
@@ -326,12 +430,18 @@ def format_status(root: Path, cfg: dict) -> str:
     data_dir = root / cfg["telemetry"]["data_dir"]
     control = load_control_state(data_dir)
     broker = PaperBroker(cfg, data_dir)
+    adaptive = load_json(
+        data_dir / "adaptive_profile.json",
+        {"mode": "neutral", "level": 0, "recent_blocked": 0, "recent_losses": 0},
+    )
     payload = {
         "paused": control["paused"],
         "reason": control["reason"],
         "cash": broker.state["cash"],
         "daily_notional": broker.state["daily_notional"],
         "positions": len(broker.state["positions"]),
+        "adaptive_mode": adaptive["mode"],
+        "adaptive_level": adaptive["level"],
     }
     return json.dumps(payload, indent=2)
 
@@ -345,6 +455,10 @@ def format_report(root: Path, cfg: dict) -> str:
     signals = _load_json_rows(data_dir / "signals.csv")
     orders = _load_json_rows(data_dir / "orders.csv")
     performance = _report_performance(root, cfg)
+    adaptive = load_json(
+        data_dir / "adaptive_profile.json",
+        {"mode": "neutral", "level": 0, "recent_blocked": 0, "recent_losses": 0, "reasons": []},
+    )
     report = {
         "signal_count": len(signals),
         "order_count": len(orders),
@@ -361,7 +475,12 @@ def format_report(root: Path, cfg: dict) -> str:
         f"Closed trades: {performance['closed_count']}",
         f"Win rate: {performance['win_rate'] * 100:.0f}%",
         f"Average PnL: {performance['average_pnl']:.2f}",
+        f"Adaptive mode: {adaptive['mode']} (level {adaptive['level']})",
+        f"Recent blocked setups: {adaptive.get('recent_blocked', 0)}",
+        f"Recent losing closes: {adaptive.get('recent_losses', 0)}",
     ]
+    if adaptive.get("reasons"):
+        lines.append(f"Adaptive note: {adaptive['reasons'][0]}")
     if latest_signal:
         lines.extend(
             [

@@ -40,8 +40,11 @@ def append_csv(path: Path, row: dict, headers: list[str]) -> None:
 def load_json(path: Path, default: dict) -> dict:
     if not path.exists():
         return default
-    with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except json.JSONDecodeError:
+        return default
 
 
 def save_json(path: Path, payload: dict) -> None:

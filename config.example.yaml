@@ -83,6 +83,13 @@ execution:
   max_daily_notional: 100.0
   cooldown_minutes: 15
   allow_repeat_market_orders: false
+  adaptive_spot:
+    enabled: true
+    recent_window: 12
+    min_blocked_to_relax: 4
+    strong_blocked_to_relax: 8
+    losses_to_tighten: 2
+    stop_losses_to_tighten: 2
   spot_guardrail:
     enabled: true
     min_momentum_score: 0.25

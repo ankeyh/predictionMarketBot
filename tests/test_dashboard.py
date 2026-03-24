@@ -100,6 +100,21 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
             "markets_scanned": 4,
             "signals_emitted": 1,
             "blocked_spot_markets": 2,
+            "adaptive_mode": "more_active",
+            "adaptive_level": 1,
+        },
+    )
+    save_json(
+        data_dir / "adaptive_profile.json",
+        {
+            "mode": "more_active",
+            "level": 1,
+            "recent_blocked": 8,
+            "recent_losses": 0,
+            "recent_closed": 1,
+            "reasons": ["relaxed after 8 blocked spot setups"],
+            "effective_guardrail": {"min_momentum_score": 0.19},
+            "effective_override": {"min_edge": 0.022, "min_confidence": 0.26},
         },
     )
     append_csv(
@@ -150,6 +165,8 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
     assert summary["status"]["last_successful_scan"] == "2026-03-20 18:05 UTC"
     assert summary["status"]["last_scan_markets"] == 4
     assert summary["status"]["last_scan_blocked"] == 2
+    assert summary["status"]["adaptive_mode"] == "more_active"
+    assert summary["adaptive"]["effective_override"]["min_edge"] == 0.022
     assert summary["recent_blocked_spot"][0]["market"] == "Will XRP-USD be higher over the next 2 hours?"
     assert summary["recent_blocked_spot"][0]["reason"] == "Volatility Too Low"
 
@@ -170,6 +187,8 @@ def test_dashboard_html_contains_heading():
                 "last_successful_scan": "2026-03-20 18:05 UTC",
                 "last_scan_markets": 4,
                 "last_scan_blocked": 2,
+                "adaptive_mode": "more_active",
+                "adaptive_level": 1,
             },
             "counts": {"signals": 0, "orders": 0, "closed_positions": 0, "recommendations": {}},
             "charts": {"recent_signals": [], "close_reasons": {}},
@@ -181,6 +200,16 @@ def test_dashboard_html_contains_heading():
             "open_positions": [],
             "recent_settlements": [],
             "recent_blocked_spot": [],
+            "adaptive": {
+                "mode": "more_active",
+                "level": 1,
+                "recent_blocked": 8,
+                "recent_losses": 0,
+                "recent_closed": 1,
+                "reasons": ["relaxed after 8 blocked spot setups"],
+                "effective_guardrail": {"min_momentum_score": 0.19},
+                "effective_override": {"min_edge": 0.022, "min_confidence": 0.26},
+            },
             "performance": {
                 "closed_count": 0,
                 "win_rate": 0.0,
@@ -201,3 +230,4 @@ def test_dashboard_html_contains_heading():
     assert "Spot signal context" in html
     assert "Last successful scan" in html
     assert "Why no trade" in html
+    assert "Adaptive engine" in html

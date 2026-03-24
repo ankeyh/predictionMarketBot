@@ -570,6 +570,7 @@ class AlpacaVenue(Venue):
     def __init__(self) -> None:
         self.api_key = os.getenv("APCA_API_KEY_ID") or os.getenv("ALPACA_API_KEY_ID")
         self.secret_key = os.getenv("APCA_API_SECRET_KEY") or os.getenv("ALPACA_API_SECRET_KEY")
+        self._discovery_cache: dict[str, dict[str, Any]] = {}
 
     def load_markets(self, cfg: dict) -> list[MarketSnapshot]:
         symbols = cfg["venue"].get("spot_symbols") or self._discover_symbols(cfg)
@@ -647,24 +648,27 @@ class AlpacaVenue(Venue):
         )
 
     def _discover_symbols(self, cfg: dict) -> list[str]:
-        response = requests.get(
-            "https://api.coingecko.com/api/v3/coins/markets",
-            params={
-                "vs_currency": "usd",
-                "order": "volume_desc",
-                "per_page": int(cfg["venue"].get("discovery_limit", 25)),
-                "page": 1,
-                "sparkline": "false",
-                "price_change_percentage": "24h",
-            },
-            timeout=15,
-        )
-        response.raise_for_status()
         symbols = []
-        for coin in response.json():
-            reference_symbol = f"{str(coin.get('symbol', '')).upper()}USD"
-            if reference_symbol in self.SUPPORTED_SYMBOLS and reference_symbol not in symbols:
-                symbols.append(reference_symbol)
+        try:
+            response = requests.get(
+                "https://api.coingecko.com/api/v3/coins/markets",
+                params={
+                    "vs_currency": "usd",
+                    "order": "volume_desc",
+                    "per_page": int(cfg["venue"].get("discovery_limit", 25)),
+                    "page": 1,
+                    "sparkline": "false",
+                    "price_change_percentage": "24h",
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            for coin in response.json():
+                reference_symbol = f"{str(coin.get('symbol', '')).upper()}USD"
+                if reference_symbol in self.SUPPORTED_SYMBOLS and reference_symbol not in symbols:
+                    symbols.append(reference_symbol)
+        except requests.RequestException:
+            pass
         configured = cfg["venue"].get("spot_symbols", [])
         for symbol in configured:
             if symbol not in symbols and symbol in self.SUPPORTED_SYMBOLS:
@@ -672,24 +676,30 @@ class AlpacaVenue(Venue):
         return symbols
 
     def _discover_market_metadata(self, reference_symbol: str) -> dict[str, Any]:
+        if reference_symbol in self._discovery_cache:
+            return self._discovery_cache[reference_symbol]
         base = reference_symbol[:-3].lower()
-        response = requests.get(
-            "https://api.coingecko.com/api/v3/coins/markets",
-            params={
-                "vs_currency": "usd",
-                "ids": "",
-                "symbols": base,
-                "order": "market_cap_desc",
-                "per_page": 1,
-                "page": 1,
-                "sparkline": "false",
-                "price_change_percentage": "24h",
-            },
-            timeout=15,
-        )
-        response.raise_for_status()
-        rows = response.json()
-        return rows[0] if rows else {}
+        try:
+            response = requests.get(
+                "https://api.coingecko.com/api/v3/coins/markets",
+                params={
+                    "vs_currency": "usd",
+                    "symbols": base,
+                    "order": "market_cap_desc",
+                    "per_page": 1,
+                    "page": 1,
+                    "sparkline": "false",
+                    "price_change_percentage": "24h",
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            rows = response.json()
+            metadata = rows[0] if rows else {}
+        except requests.RequestException:
+            metadata = {}
+        self._discovery_cache[reference_symbol] = metadata
+        return metadata
 
     @staticmethod
     def _spot_headline(product: str, context: dict[str, Any], discovery: dict[str, Any]) -> str:

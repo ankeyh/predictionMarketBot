@@ -75,3 +75,4 @@ telemetry:
     assert "Signals logged:" in report
     assert "Closed trades:" in report
     assert "Win rate:" in report
+    assert "Adaptive mode:" in report

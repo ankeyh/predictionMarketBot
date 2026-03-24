@@ -132,7 +132,28 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
     blocked_spot = _load_csv_rows(data_dir / "blocked_spot.csv")
     last_scan = load_json(
         data_dir / "last_scan.json",
-        {"ts": "", "status": "", "markets_scanned": 0, "signals_emitted": 0, "blocked_spot_markets": 0},
+        {
+            "ts": "",
+            "status": "",
+            "markets_scanned": 0,
+            "signals_emitted": 0,
+            "blocked_spot_markets": 0,
+            "adaptive_mode": "neutral",
+            "adaptive_level": 0,
+        },
+    )
+    adaptive = load_json(
+        data_dir / "adaptive_profile.json",
+        {
+            "mode": "neutral",
+            "level": 0,
+            "recent_blocked": 0,
+            "recent_losses": 0,
+            "recent_closed": 0,
+            "reasons": [],
+            "effective_guardrail": {},
+            "effective_override": {},
+        },
     )
     state = load_json(
         data_dir / "state.json",
@@ -280,6 +301,8 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             "last_successful_scan": _format_ts(last_scan.get("ts", "")),
             "last_scan_markets": last_scan.get("markets_scanned", 0),
             "last_scan_blocked": last_scan.get("blocked_spot_markets", 0),
+            "adaptive_mode": adaptive.get("mode", "neutral"),
+            "adaptive_level": adaptive.get("level", 0),
         },
         "counts": {
             "signals": len(signals),
@@ -300,6 +323,7 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
         "open_positions": open_positions,
         "recent_settlements": recent_settlements,
         "recent_blocked_spot": recent_blocked_spot,
+        "adaptive": adaptive,
         "discord": {
             "channel_url": os.getenv("DISCORD_CHANNEL_URL", ""),
             "commands": discord_commands,
@@ -440,6 +464,7 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
     latest_spot_signal = summary.get("latest_spot_signal") or {}
     latest_order = summary["latest_order"] or {}
     performance = summary["performance"]
+    adaptive = summary.get("adaptive", {})
     paused_tone = "danger" if status["paused"] else "success"
     paused_text = "Paused" if status["paused"] else "Running"
     recommendation_counts = summary["counts"]["recommendations"]
@@ -793,6 +818,7 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
       {_card("Open positions", str(status["positions"]), "warn" if status["positions"] else "")}
       {_card("Closed bets", str(summary["counts"]["closed_positions"]), "neutral")}
       {_card("Last successful scan", str(status["last_successful_scan"] or "No scan yet"), "neutral")}
+      {_card("Adaptive mode", f"{status['adaptive_mode']} ({status['adaptive_level']:+d})", "neutral")}
     </div>
 
     <section class="panel" style="margin-bottom:18px;">
@@ -855,6 +881,21 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
         <section class="panel">
           <h2>Why no trade</h2>
           {_render_rows(summary["recent_blocked_spot"], [("market", "Market"), ("reason", "Reason"), ("momentum", "Momentum"), ("drift_1h", "1h drift"), ("vol_1h", "1h vol")])}
+        </section>
+
+        <section class="panel">
+          <h2>Adaptive engine</h2>
+          <div class="meta">
+            <div>Mode: {html.escape(str(adaptive.get("mode", "neutral")))}</div>
+            <div>Level: {html.escape(str(adaptive.get("level", 0)))}</div>
+            <div>Recent blocked setups: {html.escape(str(adaptive.get("recent_blocked", 0)))}</div>
+            <div>Recent losing closes: {html.escape(str(adaptive.get("recent_losses", 0)))}</div>
+            <div>Recent closed trades: {html.escape(str(adaptive.get("recent_closed", 0)))}</div>
+            <div>Effective min edge: {html.escape(str(adaptive.get("effective_override", {}).get("min_edge", "n/a")))}</div>
+            <div>Effective min confidence: {html.escape(str(adaptive.get("effective_override", {}).get("min_confidence", "n/a")))}</div>
+            <div>Effective momentum floor: {html.escape(str(adaptive.get("effective_guardrail", {}).get("min_momentum_score", "n/a")))}</div>
+          </div>
+          <div class="reasoning">{html.escape(str((adaptive.get("reasons") or ["No adaptive changes yet."])[0]))}</div>
         </section>
       </div>
 
