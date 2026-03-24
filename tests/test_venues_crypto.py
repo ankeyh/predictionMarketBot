@@ -97,3 +97,19 @@ def test_momentum_score_rewards_aligned_trend():
         },
     )
     assert score > 0
+
+
+def test_reference_context_indicators_compute_from_candles():
+    closes = [100.0, 101.0, 102.0, 103.0, 104.0, 106.0, 107.0, 108.0, 109.0, 110.0, 111.0, 112.0, 113.0, 114.0, 115.0]
+    ema_fast = PolymarketVenue._ema(closes, 9)
+    ema_slow = PolymarketVenue._ema(closes, 21)
+    rsi = PolymarketVenue._rsi(closes, 14)
+    candles = [[0, close - 2, close + 1, close - 0.5, close, 0] for close in closes]
+    atr = PolymarketVenue._atr(candles, 14)
+    bias = PolymarketVenue._candle_bias(candles)
+
+    assert ema_fast > 0
+    assert ema_slow > 0
+    assert rsi > 50
+    assert atr > 0
+    assert -1.0 <= bias <= 1.0

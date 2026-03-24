@@ -73,7 +73,7 @@ venue:
   max_contract_price: 0.95
 
 analysis:
-  provider: mock
+  provider: candles
   anthropic_model: claude-sonnet-4-20250514
 
 execution:

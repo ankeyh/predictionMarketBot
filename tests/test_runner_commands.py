@@ -26,7 +26,7 @@ venue:
       context:
         headline_summary: "BTC moves higher."
 analysis:
-  provider: mock
+  provider: candles
   anthropic_model: claude-sonnet-4-20250514
 execution:
   enabled: true

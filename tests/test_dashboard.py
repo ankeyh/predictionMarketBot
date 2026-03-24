@@ -29,6 +29,10 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
             "change_5m_pct": 0.01,
             "change_1h_pct": 0.02,
             "realized_vol_1h": 0.03,
+            "ema_spread_pct": 0.015,
+            "rsi_14": 58.0,
+            "atr_pct": 0.012,
+            "candle_bias": 0.4,
             "price_change_24h_pct": 4.5,
             "market_cap_rank": 7,
             "momentum_score": 0.42,
@@ -48,6 +52,10 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
             "change_5m_pct",
             "change_1h_pct",
             "realized_vol_1h",
+            "ema_spread_pct",
+            "rsi_14",
+            "atr_pct",
+            "candle_bias",
             "price_change_24h_pct",
             "market_cap_rank",
             "momentum_score",
@@ -156,6 +164,7 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
     assert summary["status"]["unrealized_pnl"] == 10.0
     assert summary["latest_signal"]["market_id"] == "m1"
     assert summary["latest_spot_signal"]["market_id"] == "m1"
+    assert summary["latest_spot_signal"]["rsi_14"] == "58.0"
     assert summary["open_positions"][0]["current"] == "100.0"
     assert summary["open_positions"][0]["unrealized_pnl"] == "+10.00"
     assert summary["recent_settlements"][0]["market"] == "Missouri St. at Texas Winner?"
@@ -231,3 +240,4 @@ def test_dashboard_html_contains_heading():
     assert "Last successful scan" in html
     assert "Why no trade" in html
     assert "Adaptive engine" in html
+    assert "RSI 14" in html

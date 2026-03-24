@@ -868,6 +868,10 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
             <div>1h drift: {html.escape(_format_pct(latest_spot_signal.get("change_1h_pct", "")))}</div>
             <div>1h realized vol: {html.escape(_format_pct(latest_spot_signal.get("realized_vol_1h", "")))}</div>
             <div>24h drift: {html.escape(_format_24h_pct(latest_spot_signal.get("price_change_24h_pct", "")))}</div>
+            <div>EMA spread: {html.escape(_format_pct(latest_spot_signal.get("ema_spread_pct", "")))}</div>
+            <div>RSI 14: {html.escape(str(latest_spot_signal.get("rsi_14", "n/a")))}</div>
+            <div>ATR pct: {html.escape(_format_pct(latest_spot_signal.get("atr_pct", "")))}</div>
+            <div>Candle bias: {html.escape(str(latest_spot_signal.get("candle_bias", "n/a")))}</div>
             <div>Momentum score: {html.escape(str(latest_spot_signal.get("momentum_score", "n/a")))}</div>
             <div>Rank: {html.escape(str(latest_spot_signal.get("market_cap_rank", "n/a")))}</div>
           </div>

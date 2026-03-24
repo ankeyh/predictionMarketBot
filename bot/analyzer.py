@@ -15,6 +15,75 @@ class Analyzer:
         raise NotImplementedError
 
 
+class CandleAnalyzer(Analyzer):
+    def analyze(self, snapshot: MarketSnapshot) -> AnalysisResult:
+        if snapshot.market_type != "crypto_spot":
+            return MockAnalyzer().analyze(snapshot)
+
+        extra = snapshot.extra
+        ema_spread = float(extra.get("ema_spread_pct", 0.0) or 0.0)
+        rsi = float(extra.get("rsi_14", 50.0) or 50.0)
+        atr_pct = float(extra.get("atr_pct", 0.0) or 0.0)
+        candle_bias = float(extra.get("candle_bias", 0.0) or 0.0)
+        drift_5m = float(snapshot.change_5m_pct or 0.0)
+        drift_1h = float(extra.get("change_1h_pct", 0.0) or 0.0)
+        drift_24h = float(extra.get("price_change_24h_pct", 0.0) or 0.0) / 100.0
+        spot_price = float(snapshot.reference_price or 0.0)
+        ema_fast = float(extra.get("ema_fast_9", 0.0) or 0.0)
+
+        trend_score = 0.0
+        if ema_spread > 0:
+            trend_score += 0.28
+        elif ema_spread < 0:
+            trend_score -= 0.28
+        if spot_price and ema_fast and spot_price > ema_fast:
+            trend_score += 0.18
+        elif spot_price and ema_fast:
+            trend_score -= 0.18
+        trend_score += 0.18 if drift_1h > 0 else -0.18
+        trend_score += 0.08 if drift_5m > 0 else -0.08
+        trend_score += max(-0.16, min(0.16, candle_bias * 0.22))
+        trend_score += max(-0.12, min(0.12, drift_24h * 1.4))
+        if 48 <= rsi <= 66:
+            trend_score += 0.12
+        elif rsi > 74 or rsi < 32:
+            trend_score -= 0.12
+        if atr_pct > 0.03:
+            trend_score -= 0.10
+        elif 0.004 <= atr_pct <= 0.02:
+            trend_score += 0.06
+
+        probability = max(0.05, min(0.95, 0.5 + (trend_score * 0.45)))
+        edge = max(0.0, min(0.45, abs(probability - 0.5) * 1.8))
+        positive_signals = sum(
+            1
+            for condition in [
+                ema_spread > 0,
+                spot_price > ema_fast if spot_price and ema_fast else False,
+                drift_1h > 0,
+                drift_5m > 0,
+                candle_bias > 0,
+                48 <= rsi <= 66,
+            ]
+            if condition
+        )
+        confidence = max(0.1, min(0.85, 0.2 + (positive_signals * 0.09) + min(0.2, abs(trend_score) * 0.25)))
+        recommendation = "BUY_YES" if trend_score >= 0.22 else "HOLD"
+        reasoning = (
+            f"Candle strategy on {snapshot.reference_symbol}: "
+            f"EMA spread {ema_spread:+.2%}, RSI14 {rsi:.1f}, ATR {atr_pct:.2%}, "
+            f"5m drift {drift_5m:+.2%}, 1h drift {drift_1h:+.2%}, candle bias {candle_bias:+.2f}. "
+            f"Trend score {trend_score:+.2f}."
+        )
+        return AnalysisResult(
+            probability=probability,
+            edge=edge,
+            recommendation=recommendation,
+            confidence=confidence,
+            reasoning=reasoning,
+        )
+
+
 class MockAnalyzer(Analyzer):
     def analyze(self, snapshot: MarketSnapshot) -> AnalysisResult:
         drift = snapshot.change_5m_pct or 0.0
@@ -123,6 +192,8 @@ def build_analyzer(cfg: dict, root: Path) -> Analyzer:
     provider = cfg["analysis"]["provider"]
     if provider == "mock":
         return MockAnalyzer()
+    if provider == "candles":
+        return CandleAnalyzer()
     if provider == "anthropic":
         return AnthropicAnalyzer(
             model=cfg["analysis"]["anthropic_model"],

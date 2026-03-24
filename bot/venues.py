@@ -399,22 +399,23 @@ class PolymarketVenue(Venue):
 
         candle_response = requests.get(
             f"https://api.exchange.coinbase.com/products/{product}/candles",
-            params={"granularity": 300, "limit": 2},
+            params={"granularity": 300, "limit": 60},
             timeout=10,
         )
         candle_response.raise_for_status()
         candles = candle_response.json()
         change_5m_pct = 0.0
         recent_returns = []
-        if len(candles) >= 2:
-            latest_close = float(candles[0][4])
-            prior_close = float(candles[1][4])
+        ordered = list(reversed(candles))
+        closes = [float(candle[4]) for candle in ordered]
+        if len(closes) >= 2:
+            latest_close = closes[-1]
+            prior_close = closes[-2]
             if prior_close:
                 change_5m_pct = (latest_close - prior_close) / prior_close
-            ordered = list(reversed(candles[:12]))
-            for idx in range(1, len(ordered)):
-                prev_close = float(ordered[idx - 1][4])
-                current_close = float(ordered[idx][4])
+            for idx in range(1, len(ordered[-12:])):
+                prev_close = float(ordered[-12:][idx - 1][4])
+                current_close = float(ordered[-12:][idx][4])
                 if prev_close:
                     recent_returns.append((current_close - prev_close) / prev_close)
 
@@ -433,13 +434,89 @@ class PolymarketVenue(Venue):
                 change_1h_pct = (latest_hour_close - prior_hour_close) / prior_hour_close
 
         realized_vol_1h = statistics.pstdev(recent_returns) if len(recent_returns) >= 2 else 0.0
+        ema_fast = PolymarketVenue._ema(closes, 9)
+        ema_slow = PolymarketVenue._ema(closes, 21)
+        rsi_14 = PolymarketVenue._rsi(closes, 14)
+        atr_14 = PolymarketVenue._atr(ordered, 14)
+        atr_pct = (atr_14 / spot_price) if spot_price else 0.0
+        candle_bias = PolymarketVenue._candle_bias(ordered)
         return {
             "product": product,
             "spot_price": spot_price,
             "change_5m_pct": change_5m_pct,
             "change_1h_pct": change_1h_pct,
             "realized_vol_1h": realized_vol_1h,
+            "ema_fast_9": ema_fast,
+            "ema_slow_21": ema_slow,
+            "ema_spread_pct": ((ema_fast - ema_slow) / ema_slow) if ema_slow else 0.0,
+            "rsi_14": rsi_14,
+            "atr_14": atr_14,
+            "atr_pct": atr_pct,
+            "candle_bias": candle_bias,
         }
+
+    @staticmethod
+    def _ema(values: list[float], period: int) -> float:
+        if not values:
+            return 0.0
+        alpha = 2 / (period + 1)
+        ema = values[0]
+        for value in values[1:]:
+            ema = (value * alpha) + (ema * (1 - alpha))
+        return round(ema, 6)
+
+    @staticmethod
+    def _rsi(values: list[float], period: int = 14) -> float:
+        if len(values) < period + 1:
+            return 50.0
+        gains = []
+        losses = []
+        for idx in range(1, len(values[-(period + 1):])):
+            change = values[-(period + 1):][idx] - values[-(period + 1):][idx - 1]
+            gains.append(max(change, 0.0))
+            losses.append(abs(min(change, 0.0)))
+        avg_gain = sum(gains) / period
+        avg_loss = sum(losses) / period
+        if avg_loss == 0:
+            return 100.0 if avg_gain > 0 else 50.0
+        rs = avg_gain / avg_loss
+        return round(100 - (100 / (1 + rs)), 4)
+
+    @staticmethod
+    def _atr(candles: list[list[float]], period: int = 14) -> float:
+        if len(candles) < period + 1:
+            return 0.0
+        recent = candles[-(period + 1):]
+        true_ranges = []
+        for idx in range(1, len(recent)):
+            high = float(recent[idx][2])
+            low = float(recent[idx][1])
+            prev_close = float(recent[idx - 1][4])
+            true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+        return round(sum(true_ranges) / len(true_ranges), 6) if true_ranges else 0.0
+
+    @staticmethod
+    def _candle_bias(candles: list[list[float]]) -> float:
+        if len(candles) < 2:
+            return 0.0
+        last = candles[-1]
+        prev = candles[-2]
+        last_open = float(last[3])
+        last_high = float(last[2])
+        last_low = float(last[1])
+        last_close = float(last[4])
+        prev_open = float(prev[3])
+        prev_close = float(prev[4])
+        candle_range = max(last_high - last_low, 1e-9)
+        body = (last_close - last_open) / candle_range
+        bullish_engulfing = last_close > last_open and prev_close < prev_open and last_close >= prev_open and last_open <= prev_close
+        bearish_engulfing = last_close < last_open and prev_close > prev_open and last_open >= prev_close and last_close <= prev_open
+        bias = body
+        if bullish_engulfing:
+            bias += 0.35
+        if bearish_engulfing:
+            bias -= 0.35
+        return round(max(-1.0, min(1.0, bias)), 4)
 
     @staticmethod
     def _days_to_close(end_date_iso: str | None) -> float | None:
@@ -590,7 +667,7 @@ class AlpacaVenue(Venue):
                 MarketSnapshot(
                     market_id=product.replace("-", "/"),
                     market_type="crypto_spot",
-                    question=f"Will {product} be higher over the next {horizon_hours} hours?",
+                    question=f"{product} candlestick setup ({horizon_hours}h)",
                     yes_price=0.5,
                     no_price=0.5,
                     reference_symbol=reference_symbol,
@@ -603,6 +680,12 @@ class AlpacaVenue(Venue):
                         "product": product,
                         "change_1h_pct": float(context.get("change_1h_pct", 0.0) or 0.0),
                         "realized_vol_1h": float(context.get("realized_vol_1h", 0.0) or 0.0),
+                        "ema_fast_9": float(context.get("ema_fast_9", 0.0) or 0.0),
+                        "ema_slow_21": float(context.get("ema_slow_21", 0.0) or 0.0),
+                        "ema_spread_pct": float(context.get("ema_spread_pct", 0.0) or 0.0),
+                        "rsi_14": float(context.get("rsi_14", 50.0) or 50.0),
+                        "atr_pct": float(context.get("atr_pct", 0.0) or 0.0),
+                        "candle_bias": float(context.get("candle_bias", 0.0) or 0.0),
                         "price_change_24h_pct": discovery.get("price_change_percentage_24h"),
                         "market_cap_rank": discovery.get("market_cap_rank"),
                         "momentum_score": momentum_score,
@@ -716,6 +799,18 @@ class AlpacaVenue(Venue):
             f"1h realized vol {vol_1h:.2%}",
             f"24h drift {drift_24h:+.2%}",
         ]
+        ema_spread = float(context.get("ema_spread_pct", 0.0) or 0.0)
+        rsi = float(context.get("rsi_14", 50.0) or 50.0)
+        atr_pct = float(context.get("atr_pct", 0.0) or 0.0)
+        candle_bias = float(context.get("candle_bias", 0.0) or 0.0)
+        pieces.extend(
+            [
+                f"EMA spread {ema_spread:+.2%}",
+                f"RSI14 {rsi:.1f}",
+                f"ATR14 {atr_pct:.2%}",
+                f"candle bias {candle_bias:+.2f}",
+            ]
+        )
         if rank:
             pieces.append(f"market-cap rank #{rank}")
         return "; ".join(pieces) + "."
