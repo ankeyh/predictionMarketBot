@@ -1,13 +1,13 @@
 loop_seconds: 300
 
 venue:
-  name: alpaca
+  name: hybrid
   min_edge: 0.10
   min_confidence: 0.70
   paper_overrides:
     crypto_spot:
-      min_edge: 0.025
-      min_confidence: 0.28
+      min_edge: 0.018
+      min_confidence: 0.24
     crypto_price:
       min_edge: 0.03
       min_confidence: 0.25
@@ -15,8 +15,8 @@ venue:
       min_edge: 0.04
       min_confidence: 0.30
     sports:
-      min_edge: 0.01
-      min_confidence: 0.20
+      min_edge: 0.005
+      min_confidence: 0.16
   markets:
     - id: btc-5m-up
       market_type: crypto_price
@@ -54,6 +54,8 @@ venue:
   discovery_source: coingecko
   discovery_limit: 25
   spot_horizon_hours: 2
+  max_crypto_markets: 6
+  max_sports_markets: 2
   spot_symbols:
     - BTCUSD
     - ETHUSD
@@ -61,11 +63,20 @@ venue:
     - XRPUSD
   allowed_market_types:
     - crypto_spot
+    - sports
   allowed_keywords:
     - bitcoin
     - ethereum
     - solana
     - xrp
+  sports_keywords:
+    - cricket
+    - ipl
+    - t20
+    - odi
+    - test match
+    - winner
+    - vs
   max_days_to_close: 30
   max_markets: 8
   max_markets_per_theme: 1
@@ -80,8 +91,8 @@ execution:
   enabled: true
   mode: paper
   max_order_notional: 25.0
-  max_daily_notional: 100.0
-  cooldown_minutes: 15
+  max_daily_notional: 150.0
+  cooldown_minutes: 10
   stop_loss_cooldown_minutes: 90
   allow_repeat_market_orders: false
   adaptive_spot:
@@ -93,9 +104,9 @@ execution:
     stop_losses_to_tighten: 2
   spot_guardrail:
     enabled: true
-    min_momentum_score: 0.25
-    min_change_1h_pct: 0.0005
-    min_realized_vol_1h: 0.0007
+    min_momentum_score: 0.18
+    min_change_1h_pct: 0.0002
+    min_realized_vol_1h: 0.0004
     max_realized_vol_1h: 0.03
     require_drift_alignment: true
   paper_exit_rules:
@@ -114,7 +125,7 @@ execution:
 
 risk:
   starting_cash: 250.0
-  max_open_positions: 4
+  max_open_positions: 6
   max_single_position_notional: 25.0
   daily_loss_limit: 30.0
 

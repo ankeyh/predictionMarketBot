@@ -15,6 +15,27 @@ class Analyzer:
         raise NotImplementedError
 
 
+class RoutingAnalyzer(Analyzer):
+    def __init__(self, spot_analyzer: Analyzer, default_analyzer: Analyzer, prediction_analyzer: Analyzer | None = None):
+        self.spot_analyzer = spot_analyzer
+        self.default_analyzer = default_analyzer
+        self.prediction_analyzer = prediction_analyzer
+
+    def analyze(self, snapshot: MarketSnapshot) -> AnalysisResult:
+        if snapshot.market_type == "crypto_spot":
+            return self.spot_analyzer.analyze(snapshot)
+        if self.prediction_analyzer and snapshot.market_type in {
+            "sports",
+            "crypto_price",
+            "crypto_event",
+            "fed_rates",
+            "election",
+            "generic",
+        }:
+            return self.prediction_analyzer.analyze(snapshot)
+        return self.default_analyzer.analyze(snapshot)
+
+
 class CandleAnalyzer(Analyzer):
     def analyze(self, snapshot: MarketSnapshot) -> AnalysisResult:
         if snapshot.market_type != "crypto_spot":
@@ -225,7 +246,13 @@ def build_analyzer(cfg: dict, root: Path) -> Analyzer:
     if provider == "mock":
         return MockAnalyzer()
     if provider == "candles":
-        return CandleAnalyzer()
+        prediction_analyzer = None
+        if os.getenv("ANTHROPIC_API_KEY"):
+            prediction_analyzer = AnthropicAnalyzer(
+                model=cfg["analysis"]["anthropic_model"],
+                prompt_path=root / "system_prompt.txt",
+            )
+        return RoutingAnalyzer(CandleAnalyzer(), MockAnalyzer(), prediction_analyzer)
     if provider == "anthropic":
         return AnthropicAnalyzer(
             model=cfg["analysis"]["anthropic_model"],

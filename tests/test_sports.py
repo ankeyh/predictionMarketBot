@@ -1,4 +1,4 @@
-from bot.sports import extract_rank_hints, extract_teams, fetch_odds_context
+from bot.sports import build_sports_context, extract_rank_hints, extract_teams, fetch_odds_context
 
 
 def test_extract_teams_handles_at_format():
@@ -20,3 +20,9 @@ def test_extract_rank_hints_finds_common_markers():
 def test_fetch_odds_context_returns_empty_without_api_key(monkeypatch):
     monkeypatch.delenv("ODDS_API_KEY", raising=False)
     assert fetch_odds_context("Texas", "Missouri St.") == {}
+
+
+def test_build_sports_context_detects_ipl_without_team_parse():
+    context = build_sports_context("Will there be a super over in today's IPL match?")
+    assert context["sport"] == "cricket"
+    assert context["league"] == "IPL"

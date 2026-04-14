@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -101,6 +102,30 @@ class Venue:
 
     def hydrate_position(self, position: dict[str, Any]) -> dict[str, Any]:
         return position
+
+
+SPORTS_TERMS = [
+    "winner",
+    "match",
+    "game",
+    "nba",
+    "nfl",
+    "nhl",
+    "mlb",
+    "soccer",
+    "basketball",
+    "baseball",
+    "football",
+    "tennis",
+    "cricket",
+    "ipl",
+    "t20",
+    "odi",
+    "test match",
+    "wickets",
+    "runs",
+    "toss",
+]
 
 
 class MockVenue(Venue):
@@ -1073,6 +1098,124 @@ class AlpacaVenue(Venue):
         return f"{'paper' if paper else 'live'}-alpaca:{order.get('status', 'submitted')}"
 
 
+class HybridVenue(Venue):
+    def __init__(self) -> None:
+        self.spot = AlpacaVenue()
+        self.prediction = PolymarketVenue()
+
+    def load_markets(self, cfg: dict) -> list[MarketSnapshot]:
+        venue_cfg = cfg.get("venue", {})
+        allowed_types = set(venue_cfg.get("allowed_market_types", []))
+        max_markets = int(venue_cfg.get("max_markets", 8) or 8)
+        crypto_limit = int(venue_cfg.get("max_crypto_markets", max_markets) or max_markets)
+        sports_limit = int(venue_cfg.get("max_sports_markets", max(2, max_markets // 2)) or max(2, max_markets // 2))
+        combined: list[MarketSnapshot] = []
+
+        if not allowed_types or "crypto_spot" in allowed_types:
+            crypto_cfg = copy.deepcopy(cfg)
+            crypto_cfg.setdefault("venue", {})["max_markets"] = crypto_limit
+            combined.extend(self.spot.load_markets(crypto_cfg))
+
+        if not allowed_types or "sports" in allowed_types:
+            sports_cfg = copy.deepcopy(cfg)
+            sports_cfg.setdefault("venue", {})["name"] = "polymarket"
+            sports_cfg["venue"]["allowed_market_types"] = ["sports"]
+            sports_cfg["venue"]["allowed_keywords"] = venue_cfg.get(
+                "sports_keywords",
+                ["cricket", "ipl", "t20", "odi", "test match", "winner", "vs"],
+            )
+            sports_cfg["venue"]["max_markets"] = sports_limit
+            sports_markets = self.prediction.load_markets(sports_cfg)
+            combined.extend(sports_markets)
+
+        combined.sort(
+            key=lambda snap: (
+                0 if snap.market_type == "crypto_spot" else 1,
+                -(snap.volume or 0.0),
+                snap.extra.get("days_to_close") is None,
+                snap.extra.get("days_to_close", 999999),
+            )
+        )
+        return combined[:max_markets]
+
+    def execute(self, intent: OrderIntent, mode: str) -> Fill:
+        if intent.market_type == "crypto_spot":
+            return self.spot.execute(intent, mode)
+        return self.prediction.execute(intent, mode)
+
+    def fetch_settlement(self, position: dict[str, Any]) -> dict[str, Any] | None:
+        if position.get("market_type") == "crypto_spot":
+            return self.spot.fetch_settlement(position)
+        return self.prediction.fetch_settlement(position)
+
+    def hydrate_position(self, position: dict[str, Any]) -> dict[str, Any]:
+        if position.get("market_type") == "crypto_spot":
+            return self.spot.hydrate_position(position)
+        return self.prediction.hydrate_position(position)
+
+    @staticmethod
+    def _spot_headline(product: str, context: dict[str, Any], discovery: dict[str, Any]) -> str:
+        spot = float(context.get("spot_price", 0.0) or 0.0)
+        drift_5m = float(context.get("change_5m_pct", 0.0) or 0.0)
+        drift_1h = float(context.get("change_1h_pct", 0.0) or 0.0)
+        vol_1h = float(context.get("realized_vol_1h", 0.0) or 0.0)
+        drift_24h = float(discovery.get("price_change_percentage_24h", 0.0) or 0.0) / 100.0
+        rank = discovery.get("market_cap_rank")
+        pieces = [
+            f"{product} spot {spot:.4f}" if spot else f"{product} spot unavailable",
+            f"5m drift {drift_5m:+.2%}",
+            f"1h drift {drift_1h:+.2%}",
+            f"1h realized vol {vol_1h:.2%}",
+            f"24h drift {drift_24h:+.2%}",
+        ]
+        ema_spread = float(context.get("ema_spread_pct", 0.0) or 0.0)
+        rsi = float(context.get("rsi_14", 50.0) or 50.0)
+        atr_pct = float(context.get("atr_pct", 0.0) or 0.0)
+        candle_bias = float(context.get("candle_bias", 0.0) or 0.0)
+        pieces.extend(
+            [
+                f"EMA spread {ema_spread:+.2%}",
+                f"RSI14 {rsi:.1f}",
+                f"ATR14 {atr_pct:.2%}",
+                f"candle bias {candle_bias:+.2f}",
+            ]
+        )
+        if rank:
+            pieces.append(f"market-cap rank #{rank}")
+        return "; ".join(pieces) + "."
+
+    @staticmethod
+    def _momentum_score(context: dict[str, Any], discovery: dict[str, Any]) -> float:
+        drift_5m = float(context.get("change_5m_pct", 0.0) or 0.0)
+        drift_1h = float(context.get("change_1h_pct", 0.0) or 0.0)
+        drift_24h = float(discovery.get("price_change_percentage_24h", 0.0) or 0.0) / 100.0
+        vol_1h = float(context.get("realized_vol_1h", 0.0) or 0.0)
+
+        raw = (drift_5m * 2.0) + (drift_1h * 3.0) + drift_24h - (vol_1h * 1.5)
+        normalized = max(-1.0, min(1.0, raw / 0.08))
+        return round(normalized, 4)
+
+    def _submit_order(self, intent: OrderIntent, paper: bool) -> str:
+        if not self.api_key or not self.secret_key:
+            raise ValueError("Set APCA_API_KEY_ID and APCA_API_SECRET_KEY for Alpaca execution.")
+        base_url = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
+        headers = {
+            "APCA-API-KEY-ID": self.api_key,
+            "APCA-API-SECRET-KEY": self.secret_key,
+        }
+        payload = {
+            "symbol": intent.market_id.replace("/", ""),
+            "side": "buy" if intent.side == "BUY" else "sell",
+            "type": "market",
+            "time_in_force": "gtc",
+            "qty": f"{intent.size:.8f}",
+        }
+        response = requests.post(f"{base_url}/v2/orders", headers=headers, json=payload, timeout=20)
+        response.raise_for_status()
+        order = response.json()
+        return f"{'paper' if paper else 'live'}-alpaca:{order.get('status', 'submitted')}"
+
+
 class KalshiVenue(Venue):
     def __init__(self) -> None:
         self.api_key_id = os.getenv("KALSHI_API_KEY_ID")
@@ -1176,7 +1319,7 @@ class KalshiVenue(Venue):
             return "fed_rates"
         if any(token in lowered for token in ["election", "president", "senate", "governor", "house"]):
             return "election"
-        if any(token in lowered for token in ["game", "winner", "nba", "nfl", "nhl", "mlb", "soccer", "basketball", "baseball", "football", "tennis"]):
+        if any(token in lowered for token in SPORTS_TERMS):
             return "sports"
         if any(token in lowered for token in ["btc", "bitcoin", "eth", "ethereum", "nasdaq", "s&p", "spx"]):
             return "crypto_price"
@@ -1324,6 +1467,8 @@ def build_venue(cfg: dict) -> Venue:
         return PolymarketVenue()
     if venue_name == "alpaca":
         return AlpacaVenue()
+    if venue_name == "hybrid":
+        return HybridVenue()
     if venue_name == "kalshi":
         return KalshiVenue()
     raise ValueError(f"Unsupported venue: {venue_name}")

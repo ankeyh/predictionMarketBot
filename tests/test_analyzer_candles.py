@@ -1,4 +1,4 @@
-from bot.analyzer import CandleAnalyzer
+from bot.analyzer import CandleAnalyzer, RoutingAnalyzer
 from bot.models import MarketSnapshot
 
 
@@ -100,6 +100,43 @@ def test_candle_analyzer_creates_bearish_signal_for_short_setup():
             "candle_bias": -0.42,
             "breakout_pct": -0.006,
         },
+    )
+
+    result = analyzer.analyze(snapshot)
+
+    assert result.recommendation == "BUY_NO"
+
+
+def test_routing_analyzer_uses_prediction_analyzer_for_sports():
+    class StubAnalyzer:
+        def __init__(self, recommendation: str):
+            self.recommendation = recommendation
+
+        def analyze(self, snapshot):
+            return type(
+                "Result",
+                (),
+                {
+                    "probability": 0.6,
+                    "edge": 0.2,
+                    "recommendation": self.recommendation,
+                    "confidence": 0.5,
+                    "reasoning": "stub",
+                },
+            )()
+
+    analyzer = RoutingAnalyzer(
+        spot_analyzer=StubAnalyzer("BUY_YES"),
+        default_analyzer=StubAnalyzer("HOLD"),
+        prediction_analyzer=StubAnalyzer("BUY_NO"),
+    )
+    snapshot = MarketSnapshot(
+        market_id="ipl-1",
+        market_type="sports",
+        question="Mumbai Indians vs Chennai Super Kings winner?",
+        yes_price=0.52,
+        no_price=0.48,
+        reference_symbol="SPORTS",
     )
 
     result = analyzer.analyze(snapshot)

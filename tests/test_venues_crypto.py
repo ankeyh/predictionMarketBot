@@ -1,4 +1,4 @@
-from bot.venues import AlpacaVenue, PolymarketVenue
+from bot.venues import AlpacaVenue, HybridVenue, KalshiVenue, PolymarketVenue
 
 
 def test_infer_reference_symbol_for_crypto_questions():
@@ -134,3 +134,33 @@ def test_setup_score_rewards_aligned_multitimeframe_structure():
         }
     )
     assert score > 0.3
+
+
+def test_kalshi_infer_market_type_handles_cricket():
+    assert KalshiVenue._infer_market_type("Mumbai Indians vs Chennai Super Kings winner?") == "sports"
+    assert KalshiVenue._infer_market_type("Who will win today's IPL cricket match?") == "sports"
+
+
+def test_hybrid_venue_routes_spot_and_sports(monkeypatch):
+    venue = HybridVenue()
+    monkeypatch.setattr(
+        venue.spot,
+        "load_markets",
+        lambda cfg: [
+            type("Snap", (), {"market_type": "crypto_spot", "volume": 1000.0, "extra": {}, "market_id": "BTC/USD"})()
+        ],
+    )
+    monkeypatch.setattr(
+        venue.prediction,
+        "load_markets",
+        lambda cfg: [
+            type("Snap", (), {"market_type": "sports", "volume": 10.0, "extra": {"days_to_close": 1}, "market_id": "ipl-1"})()
+        ],
+    )
+
+    cfg = {"venue": {"allowed_market_types": ["crypto_spot", "sports"], "max_markets": 4, "max_crypto_markets": 2, "max_sports_markets": 2}}
+    markets = venue.load_markets(cfg)
+
+    assert len(markets) == 2
+    assert markets[0].market_type == "crypto_spot"
+    assert markets[1].market_type == "sports"

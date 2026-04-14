@@ -28,7 +28,7 @@ def extract_teams(question: str) -> dict[str, str]:
 @lru_cache(maxsize=64)
 def google_news_headlines(query: str, limit: int = 3) -> list[str]:
     url = f"https://news.google.com/rss/search?q={quote_plus(query)}"
-    response = requests.get(url, timeout=10)
+    response = requests.get(url, timeout=4)
     response.raise_for_status()
     root = ET.fromstring(response.text)
     headlines: list[str] = []
@@ -155,8 +155,11 @@ def _fetch_odds_context_cached(api_key: str, team_a: str, team_b: str) -> dict:
 
 def build_sports_context(question: str) -> dict:
     teams = extract_teams(question)
+    lowered = question.lower()
+    sport = "cricket" if any(token in lowered for token in ["ipl", "cricket", "t20", "odi", "test match"]) else "sports"
+    league = "IPL" if "ipl" in lowered else ""
     if not teams:
-        return {}
+        return {"sport": sport, "league": league}
 
     ordered_teams = list(teams.values())
     query = " vs ".join(ordered_teams)
@@ -164,30 +167,59 @@ def build_sports_context(question: str) -> dict:
     odds_headlines: list[str] = []
     team_headlines: dict[str, list[str]] = {}
     ranking_headlines: dict[str, list[str]] = {}
+    form_headlines: dict[str, list[str]] = {}
+    cricket_headlines: list[str] = []
+
+    matchup_query = f"{query} preview odds injury"
+    odds_query = f"{query} odds spread line preview"
+    team_query_suffix = "injury preview"
+    ranking_query_suffix = "ranking ap poll seed"
+    if sport == "cricket":
+        matchup_query = f"{query} IPL preview playing xi toss injury form"
+        odds_query = f"{query} IPL prediction betting odds preview"
+        team_query_suffix = "IPL injury playing xi form"
+        ranking_query_suffix = ""
+
     try:
-        matchup_headlines = google_news_headlines(f"{query} preview odds injury")
+        matchup_headlines = google_news_headlines(matchup_query)
     except Exception:
         matchup_headlines = []
     try:
-        odds_headlines = google_news_headlines(f"{query} odds spread line preview", limit=3)
+        odds_headlines = google_news_headlines(odds_query, limit=3)
     except Exception:
         odds_headlines = []
+    if sport == "cricket":
+        try:
+            cricket_headlines = google_news_headlines(f"{query} IPL toss playing xi fantasy preview", limit=4)
+        except Exception:
+            cricket_headlines = []
 
     for team in ordered_teams[:2]:
+        if sport == "cricket":
+            team_headlines[team] = []
+            ranking_headlines[team] = []
+            form_headlines[team] = []
+            continue
         try:
-            team_headlines[team] = google_news_headlines(f"{team} injury preview", limit=2)
+            team_headlines[team] = google_news_headlines(f"{team} {team_query_suffix}", limit=2)
         except Exception:
             team_headlines[team] = []
-        try:
-            ranking_headlines[team] = google_news_headlines(f"{team} ranking ap poll seed", limit=2)
-        except Exception:
+        if ranking_query_suffix:
+            try:
+                ranking_headlines[team] = google_news_headlines(f"{team} {ranking_query_suffix}", limit=2)
+            except Exception:
+                ranking_headlines[team] = []
+        else:
             ranking_headlines[team] = []
 
     combined = list(matchup_headlines)
     combined.extend(odds_headlines)
+    combined.extend(cricket_headlines)
     for headlines in team_headlines.values():
         combined.extend(headlines)
     for headlines in ranking_headlines.values():
+        combined.extend(headlines)
+    for headlines in form_headlines.values():
         combined.extend(headlines)
 
     rank_hints = extract_rank_hints(combined)
@@ -201,10 +233,14 @@ def build_sports_context(question: str) -> dict:
     return {
         **teams,
         "matchup_query": query,
+        "sport": sport,
+        "league": league,
         "sports_headlines": matchup_headlines,
+        "cricket_headlines": cricket_headlines,
         "odds_headlines": odds_headlines,
         "team_headlines": team_headlines,
         "ranking_headlines": ranking_headlines,
+        "form_headlines": form_headlines,
         "rank_hints": rank_hints,
         "headline_summary": " | ".join(combined[:7]),
         **odds_context,
