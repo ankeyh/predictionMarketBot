@@ -155,6 +155,17 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             "effective_override": {},
         },
     )
+    macro = load_json(
+        data_dir / "macro_snapshot.json",
+        {
+            "mode": "neutral",
+            "combined_score": 0.0,
+            "market_score": 0.0,
+            "news_score": 0.0,
+            "notes": [],
+            "headlines": [],
+        },
+    )
     latest_setups = load_json(data_dir / "latest_setups.json", {"rows": []})
     state = load_json(
         data_dir / "state.json",
@@ -306,6 +317,8 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             "last_scan_blocked": last_scan.get("blocked_spot_markets", 0),
             "adaptive_mode": adaptive.get("mode", "neutral"),
             "adaptive_level": adaptive.get("level", 0),
+            "macro_mode": macro.get("mode", "neutral"),
+            "macro_score": macro.get("combined_score", 0.0),
         },
         "counts": {
             "signals": len(signals),
@@ -328,6 +341,7 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
         "recent_blocked_spot": recent_blocked_spot,
         "top_setups": latest_setups.get("rows", []),
         "adaptive": adaptive,
+        "macro": macro,
         "discord": {
             "channel_url": os.getenv("DISCORD_CHANNEL_URL", ""),
             "commands": discord_commands,
@@ -469,6 +483,7 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
     latest_order = summary["latest_order"] or {}
     performance = summary["performance"]
     adaptive = summary.get("adaptive", {})
+    macro = summary.get("macro", {})
     paused_tone = "danger" if status["paused"] else "success"
     paused_text = "Paused" if status["paused"] else "Running"
     recommendation_counts = summary["counts"]["recommendations"]
@@ -889,6 +904,10 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
             <div>Breakout pct: {html.escape(_format_pct(latest_spot_signal.get("breakout_pct", "")))}</div>
             <div>Setup score: {html.escape(str(latest_spot_signal.get("setup_score", "n/a")))}</div>
             <div>Momentum score: {html.escape(str(latest_spot_signal.get("momentum_score", "n/a")))}</div>
+            <div>Macro mode: {html.escape(str(latest_spot_signal.get("macro_mode", "n/a")))}</div>
+            <div>Macro score: {html.escape(str(latest_spot_signal.get("macro_regime_score", "n/a")))}</div>
+            <div>Stock regime: {html.escape(str(latest_spot_signal.get("macro_market_score", "n/a")))}</div>
+            <div>News score: {html.escape(str(latest_spot_signal.get("macro_news_score", "n/a")))}</div>
             <div>Rank: {html.escape(str(latest_spot_signal.get("market_cap_rank", "n/a")))}</div>
           </div>
         </section>
@@ -916,6 +935,17 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
             <div>Effective momentum floor: {html.escape(str(adaptive.get("effective_guardrail", {}).get("min_momentum_score", "n/a")))}</div>
           </div>
           <div class="reasoning">{html.escape(str((adaptive.get("reasons") or ["No adaptive changes yet."])[0]))}</div>
+        </section>
+
+        <section class="panel">
+          <h2>Macro regime</h2>
+          <div class="meta">
+            <div>Mode: {html.escape(str(macro.get("mode", "neutral")))}</div>
+            <div>Combined score: {html.escape(str(macro.get("combined_score", 0.0)))}</div>
+            <div>Stock regime score: {html.escape(str(macro.get("market_score", 0.0)))}</div>
+            <div>News score: {html.escape(str(macro.get("news_score", 0.0)))}</div>
+          </div>
+          <div class="reasoning">{html.escape(str((macro.get("notes") or ["No macro notes yet."])[0]))}</div>
         </section>
       </div>
 

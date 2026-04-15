@@ -86,6 +86,10 @@ venue:
 analysis:
   provider: candles
   anthropic_model: claude-sonnet-4-20250514
+  macro_overlay:
+    enabled: true
+    cache_minutes: 20
+    news_limit: 18
 
 execution:
   enabled: true

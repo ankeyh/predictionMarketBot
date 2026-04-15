@@ -14,6 +14,7 @@ from .dashboard import serve_dashboard
 from .decision import derive_order
 from .discord_router import parse_discord_command
 from .kalshi_check import check_kalshi, format_check
+from .macro import load_macro_context
 from .paper import PaperBroker
 from .storage import append_csv, ensure_dir, load_json, save_json
 from .venues import build_venue
@@ -129,6 +130,7 @@ def _spot_guardrail(snapshot, cfg: dict) -> str:
     change_5m = float(snapshot.change_5m_pct or 0.0)
     change_1h = float(snapshot.extra.get("change_1h_pct", 0.0) or 0.0)
     realized_vol = float(snapshot.extra.get("realized_vol_1h", 0.0) or 0.0)
+    macro_score = float(snapshot.extra.get("macro_regime_score", 0.0) or 0.0)
     min_score = float(guard.get("min_momentum_score", 0.0) or 0.0)
     min_change_1h = float(guard.get("min_change_1h_pct", 0.0) or 0.0)
     min_vol_1h = float(guard.get("min_realized_vol_1h", 0.0) or 0.0)
@@ -146,6 +148,10 @@ def _spot_guardrail(snapshot, cfg: dict) -> str:
         return "volatility too low"
     if realized_vol > float(guard.get("max_realized_vol_1h", 1.0) or 1.0):
         return "volatility too high"
+    if not bearish_setup and macro_score <= -0.40:
+        return "macro regime conflict"
+    if bearish_setup and macro_score >= 0.40:
+        return "macro regime conflict"
     if guard.get("require_drift_alignment", True) and not bearish_setup and change_5m * change_1h < 0:
         return "5m and 1h drift conflict"
     return ""
@@ -155,6 +161,7 @@ def process_once(root: Path, cfg: dict) -> int:
     data_dir = root / cfg["telemetry"]["data_dir"]
     ensure_dir(data_dir)
     effective_cfg = copy.deepcopy(cfg)
+    effective_cfg.setdefault("runtime_context", {})["macro"] = load_macro_context(data_dir, effective_cfg)
     adaptive_profile = _adaptive_spot_profile(data_dir, effective_cfg)
     effective_cfg.setdefault("execution", {})["spot_guardrail"] = adaptive_profile["effective_guardrail"]
     effective_cfg.setdefault("venue", {}).setdefault("paper_overrides", {})["crypto_spot"] = adaptive_profile["effective_override"]
@@ -294,6 +301,10 @@ def process_once(root: Path, cfg: dict) -> int:
             "price_change_24h_pct": snapshot.extra.get("price_change_24h_pct", ""),
             "market_cap_rank": snapshot.extra.get("market_cap_rank", ""),
             "momentum_score": snapshot.extra.get("momentum_score", ""),
+            "macro_mode": snapshot.extra.get("macro_mode", ""),
+            "macro_regime_score": snapshot.extra.get("macro_regime_score", ""),
+            "macro_market_score": snapshot.extra.get("macro_market_score", ""),
+            "macro_news_score": snapshot.extra.get("macro_news_score", ""),
             "reasoning": analysis.reasoning,
         }
         append_csv(
@@ -326,6 +337,10 @@ def process_once(root: Path, cfg: dict) -> int:
                 "price_change_24h_pct",
                 "market_cap_rank",
                 "momentum_score",
+                "macro_mode",
+                "macro_regime_score",
+                "macro_market_score",
+                "macro_news_score",
                 "reasoning",
             ],
         )
@@ -534,6 +549,10 @@ def format_report(root: Path, cfg: dict) -> str:
         data_dir / "adaptive_profile.json",
         {"mode": "neutral", "level": 0, "recent_blocked": 0, "recent_losses": 0, "reasons": []},
     )
+    macro = load_json(
+        data_dir / "macro_snapshot.json",
+        {"mode": "neutral", "combined_score": 0.0, "market_score": 0.0, "news_score": 0.0, "notes": []},
+    )
     report = {
         "signal_count": len(signals),
         "order_count": len(orders),
@@ -551,11 +570,14 @@ def format_report(root: Path, cfg: dict) -> str:
         f"Win rate: {performance['win_rate'] * 100:.0f}%",
         f"Average PnL: {performance['average_pnl']:.2f}",
         f"Adaptive mode: {adaptive['mode']} (level {adaptive['level']})",
+        f"Macro mode: {macro.get('mode', 'neutral')} (score {macro.get('combined_score', 0.0):+.2f})",
         f"Recent blocked setups: {adaptive.get('recent_blocked', 0)}",
         f"Recent losing closes: {adaptive.get('recent_losses', 0)}",
     ]
     if adaptive.get("reasons"):
         lines.append(f"Adaptive note: {adaptive['reasons'][0]}")
+    if macro.get("notes"):
+        lines.append(f"Macro note: {macro['notes'][0]}")
     if latest_signal:
         lines.extend(
             [

@@ -774,6 +774,7 @@ class AlpacaVenue(Venue):
         symbols = cfg["venue"].get("spot_symbols") or self._discover_symbols(cfg)
         max_markets = int(cfg["venue"].get("max_markets", len(symbols) or 1))
         horizon_hours = int(cfg["venue"].get("spot_horizon_hours", 4))
+        macro = cfg.get("runtime_context", {}).get("macro", {})
         snapshots = []
         for reference_symbol in symbols:
             product = self.SUPPORTED_SYMBOLS.get(reference_symbol)
@@ -794,7 +795,7 @@ class AlpacaVenue(Venue):
                     reference_symbol=reference_symbol,
                     reference_price=float(context.get("spot_price", 0.0) or 0.0),
                     change_5m_pct=float(context.get("change_5m_pct", 0.0) or 0.0),
-                    headline_summary=self._spot_headline(product, context, discovery),
+                    headline_summary=self._spot_headline(product, context, discovery, macro),
                     volume=float(discovery.get("total_volume", 0.0) or 0.0),
                     extra={
                         "spot_price": float(context.get("spot_price", 0.0) or 0.0),
@@ -816,6 +817,12 @@ class AlpacaVenue(Venue):
                         "price_change_24h_pct": discovery.get("price_change_percentage_24h"),
                         "market_cap_rank": discovery.get("market_cap_rank"),
                         "momentum_score": momentum_score,
+                        "macro_mode": macro.get("mode", "neutral"),
+                        "macro_regime_score": float(macro.get("combined_score", 0.0) or 0.0),
+                        "macro_market_score": float(macro.get("market_score", 0.0) or 0.0),
+                        "macro_news_score": float(macro.get("news_score", 0.0) or 0.0),
+                        "macro_headline_summary": macro.get("headline_summary", ""),
+                        "macro_notes": macro.get("notes", []),
                         "discovery_source": "alpaca",
                         "horizon_hours": horizon_hours,
                     },
@@ -1036,7 +1043,7 @@ class AlpacaVenue(Venue):
         }
 
     @staticmethod
-    def _spot_headline(product: str, context: dict[str, Any], discovery: dict[str, Any]) -> str:
+    def _spot_headline(product: str, context: dict[str, Any], discovery: dict[str, Any], macro: dict[str, Any] | None = None) -> str:
         spot = float(context.get("spot_price", 0.0) or 0.0)
         drift_5m = float(context.get("change_5m_pct", 0.0) or 0.0)
         drift_1h = float(context.get("change_1h_pct", 0.0) or 0.0)
@@ -1064,6 +1071,10 @@ class AlpacaVenue(Venue):
         )
         if rank:
             pieces.append(f"market-cap rank #{rank}")
+        if macro and macro.get("enabled", True):
+            pieces.append(
+                f"macro {macro.get('mode', 'neutral')} ({float(macro.get('combined_score', 0.0) or 0.0):+.2f})"
+            )
         return "; ".join(pieces) + "."
 
     @staticmethod

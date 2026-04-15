@@ -57,6 +57,10 @@ class CandleAnalyzer(Analyzer):
         drift_24h = float(extra.get("price_change_24h_pct", 0.0) or 0.0) / 100.0
         spot_price = float(snapshot.reference_price or 0.0)
         ema_fast = float(extra.get("ema_fast_9", 0.0) or 0.0)
+        macro_score = float(extra.get("macro_regime_score", 0.0) or 0.0)
+        macro_market = float(extra.get("macro_market_score", 0.0) or 0.0)
+        macro_news = float(extra.get("macro_news_score", 0.0) or 0.0)
+        macro_mode = str(extra.get("macro_mode", "neutral") or "neutral")
 
         trend_score = setup_score * 0.65
         if ema_spread > 0:
@@ -90,6 +94,7 @@ class CandleAnalyzer(Analyzer):
             trend_score -= 0.08
         elif 0.004 <= atr_pct <= 0.02:
             trend_score += 0.05
+        trend_score += macro_score * 0.20
 
         probability = max(0.05, min(0.95, 0.5 + (trend_score * 0.45)))
         edge = max(0.0, min(0.45, abs(probability - 0.5) * 1.8))
@@ -111,13 +116,30 @@ class CandleAnalyzer(Analyzer):
             if condition
         )
         confidence = max(0.1, min(0.85, 0.2 + (positive_signals * 0.09) + min(0.2, abs(trend_score) * 0.25)))
+        if trend_score > 0 and macro_score > 0.18:
+            confidence += 0.08
+        elif trend_score > 0 and macro_score < -0.18:
+            confidence -= 0.12
+        elif trend_score < 0 and macro_score < -0.18:
+            confidence += 0.08
+        elif trend_score < 0 and macro_score > 0.18:
+            confidence -= 0.12
+        confidence = max(0.1, min(0.90, confidence))
         aligned_trend = ema_15m_spread > 0 and ema_1h_spread > 0 and drift_1h > 0
-        trigger_ready = breakout_pct > -0.004 and candle_bias > -0.10 and 42 <= rsi <= 70
+        trigger_ready = (
+            (breakout_pct > -0.004 and candle_bias > -0.10 and 42 <= rsi <= 70)
+            or (setup_score >= 0.60 and breakout_pct > -0.007 and candle_bias >= 0 and 44 <= rsi <= 72)
+        )
         bearish_trend = ema_15m_spread < 0 and ema_1h_spread < 0 and (drift_1h < 0 or drift_4h < 0)
-        bearish_trigger = breakout_pct < 0.006 and candle_bias < 0.18 and 28 <= rsi <= 60
-        if trend_score >= 0.22 and setup_score >= 0.18 and aligned_trend and trigger_ready:
+        bearish_trigger = (
+            (breakout_pct < 0.006 and candle_bias < 0.18 and 28 <= rsi <= 60)
+            or (setup_score <= -0.60 and breakout_pct < 0.009 and candle_bias <= 0 and 26 <= rsi <= 62)
+        )
+        macro_conflict_long = macro_score <= -0.35
+        macro_conflict_short = macro_score >= 0.35
+        if trend_score >= 0.22 and setup_score >= 0.18 and aligned_trend and trigger_ready and not macro_conflict_long:
             recommendation = "BUY_YES"
-        elif trend_score <= -0.14 and setup_score <= -0.10 and bearish_trend and bearish_trigger:
+        elif trend_score <= -0.14 and setup_score <= -0.10 and bearish_trend and bearish_trigger and not macro_conflict_short:
             recommendation = "BUY_NO"
         else:
             recommendation = "HOLD"
@@ -126,6 +148,7 @@ class CandleAnalyzer(Analyzer):
             f"setup score {setup_score:+.2f}, EMA spread {ema_spread:+.2%}, 15m EMA {ema_15m_spread:+.2%}, "
             f"1h EMA {ema_1h_spread:+.2%}, RSI14 {rsi:.1f}, ATR {atr_pct:.2%}, breakout {breakout_pct:+.2%}, "
             f"15m drift {drift_15m:+.2%}, 1h drift {drift_1h:+.2%}, 4h drift {drift_4h:+.2%}, candle bias {candle_bias:+.2f}. "
+            f"Macro {macro_mode} (stocks {macro_market:+.2f}, news {macro_news:+.2f}). "
             f"Trend score {trend_score:+.2f}."
         )
         return AnalysisResult(

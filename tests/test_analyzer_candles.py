@@ -107,6 +107,44 @@ def test_candle_analyzer_creates_bearish_signal_for_short_setup():
     assert result.recommendation == "BUY_NO"
 
 
+def test_candle_analyzer_blocks_bullish_setup_on_strong_macro_risk_off():
+    analyzer = CandleAnalyzer()
+    snapshot = MarketSnapshot(
+        market_id="BTC/USD",
+        market_type="crypto_spot",
+        question="BTC/USD candlestick setup (2h)",
+        yes_price=0.5,
+        no_price=0.5,
+        reference_symbol="BTCUSD",
+        reference_price=105000.0,
+        change_5m_pct=0.004,
+        extra={
+            "setup_score": 0.46,
+            "change_1h_pct": 0.012,
+            "change_15m_pct": 0.006,
+            "change_4h_pct": 0.021,
+            "price_change_24h_pct": 5.5,
+            "ema_fast_9": 104200.0,
+            "ema_slow_21": 103400.0,
+            "ema_spread_pct": 0.0077,
+            "ema_15m_spread_pct": 0.005,
+            "ema_1h_spread_pct": 0.011,
+            "rsi_14": 59.0,
+            "atr_pct": 0.011,
+            "candle_bias": 0.52,
+            "breakout_pct": 0.004,
+            "macro_regime_score": -0.62,
+            "macro_market_score": -0.51,
+            "macro_news_score": -0.40,
+            "macro_mode": "risk_off",
+        },
+    )
+
+    result = analyzer.analyze(snapshot)
+
+    assert result.recommendation == "HOLD"
+
+
 def test_routing_analyzer_uses_prediction_analyzer_for_sports():
     class StubAnalyzer:
         def __init__(self, recommendation: str):
