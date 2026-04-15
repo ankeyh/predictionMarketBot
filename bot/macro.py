@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -259,6 +260,116 @@ def _fetch_news_headlines_public(limit: int) -> list[str]:
     return deduped[:limit]
 
 
+def _extract_xai_text(payload: dict[str, Any]) -> str:
+    direct = payload.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+
+    parts: list[str] = []
+    for item in payload.get("output", []) or []:
+        for content in item.get("content", []) or []:
+            text = content.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    if parts:
+        return "\n".join(parts)
+
+    choices = payload.get("choices", []) or []
+    for choice in choices:
+        message = choice.get("message", {}) or {}
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+    return ""
+
+
+def _extract_json_object(raw: str) -> dict[str, Any]:
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.removeprefix("```json").removeprefix("```").strip()
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3].strip()
+    if cleaned.startswith("{") and cleaned.endswith("}"):
+        return json.loads(cleaned)
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return json.loads(cleaned[start : end + 1])
+    raise ValueError("No JSON object found in xAI response")
+
+
+def _load_usage(path: Path) -> dict[str, Any]:
+    today = datetime.now(timezone.utc).date().isoformat()
+    usage = load_json(path, {"day": today, "xai_calls": 0})
+    if usage.get("day") != today:
+        usage = {"day": today, "xai_calls": 0}
+    return usage
+
+
+def _save_usage(path: Path, usage: dict[str, Any]) -> None:
+    save_json(path, usage)
+
+
+def _fetch_xai_news_context(limit: int, model: str) -> dict[str, Any] | None:
+    api_key = os.getenv("XAI_API_KEY")
+    if not api_key:
+        return None
+
+    response = requests.post(
+        "https://api.x.ai/v1/responses",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": (
+                        "You are a macro market analyst. Use current web news and X chatter to estimate whether the "
+                        "near-term market regime is risk-on, risk-off, or neutral for liquid risk assets like stocks "
+                        "and crypto. Return JSON only with keys: "
+                        '{"headlines":[],"news_score":0.0,"mode":"neutral","notes":[]}. '
+                        f"Include up to {limit} short headlines."
+                    ),
+                }
+            ],
+            "tools": [
+                {"type": "web_search"},
+                {
+                    "type": "x_search",
+                    "allowed_x_handles": [
+                        "zerohedge",
+                        "financialjuice",
+                        "DeItaone",
+                        "unusual_whales",
+                        "KobeissiLetter",
+                    ],
+                },
+            ],
+            "max_output_tokens": 700,
+        },
+        timeout=25,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    text = _extract_xai_text(payload)
+    if not text:
+        return None
+    parsed = _extract_json_object(text)
+    headlines = [str(item).strip() for item in parsed.get("headlines", []) if str(item).strip()]
+    notes = [str(item).strip() for item in parsed.get("notes", []) if str(item).strip()]
+    score = float(parsed.get("news_score", 0.0) or 0.0)
+    mode = str(parsed.get("mode", "neutral") or "neutral")
+    return {
+        "headlines": headlines[:limit],
+        "score": round(_clamp(score, -1.0, 1.0), 4),
+        "mode": mode if mode in {"risk_on", "risk_off", "neutral"} else "neutral",
+        "notes": notes[:8],
+    }
+
+
 def load_macro_context(data_dir: Path, cfg: dict) -> dict[str, Any]:
     macro_cfg = cfg.get("analysis", {}).get("macro_overlay", {})
     if not macro_cfg.get("enabled", True):
@@ -276,6 +387,7 @@ def load_macro_context(data_dir: Path, cfg: dict) -> dict[str, Any]:
         }
 
     cache_path = data_dir / "macro_snapshot.json"
+    usage_path = data_dir / "macro_usage.json"
     cache_minutes = int(macro_cfg.get("cache_minutes", 20) or 20)
     cached = load_json(cache_path, {})
     if cached and _is_fresh(str(cached.get("ts", "")), cache_minutes):
@@ -291,15 +403,44 @@ def load_macro_context(data_dir: Path, cfg: dict) -> dict[str, Any]:
         except requests.RequestException:
             proxy_changes = {}
 
+    news_limit = int(macro_cfg.get("news_limit", 18) or 18)
+    provider = str(macro_cfg.get("news_provider", "auto") or "auto").lower()
+    xai_model = str(macro_cfg.get("xai_model", "grok-4-fast-non-reasoning") or "grok-4-fast-non-reasoning")
+    xai_daily_call_cap = int(macro_cfg.get("xai_daily_call_cap", 120) or 120)
+    usage = _load_usage(usage_path)
+    xai_allowed = usage.get("xai_calls", 0) < xai_daily_call_cap
+    xai_result = None
+
+    if provider in {"xai", "auto"} and xai_allowed and os.getenv("XAI_API_KEY"):
+        try:
+            xai_result = _fetch_xai_news_context(news_limit, xai_model)
+            if xai_result:
+                usage["xai_calls"] = int(usage.get("xai_calls", 0)) + 2
+                _save_usage(usage_path, usage)
+        except (requests.RequestException, ValueError, json.JSONDecodeError):
+            xai_result = None
+
     try:
-        headlines = _fetch_news_headlines(int(macro_cfg.get("news_limit", 18) or 18))
+        headlines = _fetch_news_headlines(news_limit) if provider not in {"xai"} else []
     except requests.RequestException:
         headlines = []
-    if not headlines:
-        headlines = _fetch_news_headlines_public(int(macro_cfg.get("news_limit", 18) or 18))
+    if not headlines and not xai_result:
+        headlines = _fetch_news_headlines_public(news_limit)
 
     market = score_market_regime(proxy_changes)
-    news = score_news_headlines(headlines)
+    if xai_result:
+        headlines = xai_result["headlines"] or headlines
+        news = {
+            "score": xai_result["score"],
+            "mode": xai_result["mode"],
+            "matches": xai_result["notes"],
+        }
+        notes = market["notes"][:4] + xai_result["notes"][:4]
+        provider_used = "xai"
+    else:
+        news = score_news_headlines(headlines)
+        notes = market["notes"][:4] + news["matches"][:4]
+        provider_used = "alpaca" if headlines else "public"
     combined_score = round(_clamp((market["score"] * 0.7) + (news["score"] * 0.3), -1.0, 1.0), 4)
     if combined_score >= 0.18:
         mode = "risk_on"
@@ -315,7 +456,10 @@ def load_macro_context(data_dir: Path, cfg: dict) -> dict[str, Any]:
         "news_score": news["score"],
         "combined_score": combined_score,
         "mode": mode,
-        "notes": market["notes"][:4] + news["matches"][:4],
+        "provider": provider_used,
+        "xai_calls_today": usage.get("xai_calls", 0),
+        "xai_daily_call_cap": xai_daily_call_cap,
+        "notes": notes,
         "proxy_changes": {key: round(value, 5) for key, value in proxy_changes.items()},
         "headlines": headlines[:8],
         "headline_summary": " | ".join(headlines[:4]),

@@ -90,6 +90,9 @@ analysis:
     enabled: true
     cache_minutes: 20
     news_limit: 18
+    news_provider: auto
+    xai_model: grok-4-fast-non-reasoning
+    xai_daily_call_cap: 120
 
 execution:
   enabled: true

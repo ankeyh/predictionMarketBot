@@ -171,6 +171,9 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             "combined_score": 0.0,
             "market_score": 0.0,
             "news_score": 0.0,
+            "provider": "unknown",
+            "xai_calls_today": 0,
+            "xai_daily_call_cap": 0,
             "notes": [],
             "headlines": [],
         },
@@ -1007,6 +1010,8 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
             <div>Combined score: {html.escape(str(macro.get("combined_score", 0.0)))}</div>
             <div>Stock regime score: {html.escape(str(macro.get("market_score", 0.0)))}</div>
             <div>News score: {html.escape(str(macro.get("news_score", 0.0)))}</div>
+            <div>News provider: {html.escape(str(macro.get("provider", "unknown")))}</div>
+            <div>xAI calls today: {html.escape(str(macro.get("xai_calls_today", 0)))}/{html.escape(str(macro.get("xai_daily_call_cap", 0)))}</div>
           </div>
           <div class="reasoning">{html.escape(str((macro.get("notes") or ["No macro notes yet."])[0]))}</div>
         </section>

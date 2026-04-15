@@ -1,4 +1,4 @@
-from bot.macro import score_market_regime, score_news_headlines
+from bot.macro import _extract_json_object, _extract_xai_text, score_market_regime, score_news_headlines
 
 
 def test_score_market_regime_detects_risk_on():
@@ -45,3 +45,13 @@ def test_score_news_headlines_detects_risk_off_terms():
 
     assert result["mode"] == "risk_off"
     assert result["score"] < 0
+
+
+def test_extract_xai_text_prefers_output_text():
+    payload = {"output_text": '{"news_score":0.3}'}
+    assert _extract_xai_text(payload) == '{"news_score":0.3}'
+
+
+def test_extract_json_object_handles_fenced_json():
+    parsed = _extract_json_object("```json\n{\"mode\":\"risk_on\",\"news_score\":0.4}\n```")
+    assert parsed["mode"] == "risk_on"

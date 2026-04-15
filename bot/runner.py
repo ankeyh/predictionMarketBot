@@ -627,7 +627,16 @@ def format_report(root: Path, cfg: dict) -> str:
     )
     macro = load_json(
         data_dir / "macro_snapshot.json",
-        {"mode": "neutral", "combined_score": 0.0, "market_score": 0.0, "news_score": 0.0, "notes": []},
+        {
+            "mode": "neutral",
+            "combined_score": 0.0,
+            "market_score": 0.0,
+            "news_score": 0.0,
+            "provider": "unknown",
+            "xai_calls_today": 0,
+            "xai_daily_call_cap": 0,
+            "notes": [],
+        },
     )
     report = {
         "signal_count": len(signals),
@@ -647,6 +656,7 @@ def format_report(root: Path, cfg: dict) -> str:
         f"Average PnL: {performance['average_pnl']:.2f}",
         f"Adaptive mode: {adaptive['mode']} (level {adaptive['level']})",
         f"Macro mode: {macro.get('mode', 'neutral')} (score {macro.get('combined_score', 0.0):+.2f})",
+        f"Macro provider: {macro.get('provider', 'unknown')} (xAI calls {macro.get('xai_calls_today', 0)}/{macro.get('xai_daily_call_cap', 0)})",
         f"Replay closed trades: {replay['closed_count']}",
         f"Replay win rate: {replay['win_rate'] * 100:.0f}%",
         f"Replay average PnL: {replay['average_pnl']:.2f}",
