@@ -16,6 +16,7 @@ from .discord_router import parse_discord_command
 from .kalshi_check import check_kalshi, format_check
 from .macro import load_macro_context
 from .paper import PaperBroker
+from .replay import reconcile_replay_positions, register_blocked_replay, replay_summary
 from .storage import append_csv, ensure_dir, load_json, save_json
 from .venues import build_venue
 
@@ -47,15 +48,21 @@ def _adaptive_spot_profile(data_dir: Path, cfg: dict) -> dict:
     recent_window = int(adaptive_cfg.get("recent_window", 12) or 12)
     recent_blocked = blocked_rows[-recent_window:]
     state = load_json(data_dir / "state.json", {"closed_positions": []})
+    replay = load_json(data_dir / "replay_state.json", {"closed_positions": []})
     recent_closed = state.get("closed_positions", [])[-recent_window:]
+    recent_replay_closed = replay.get("closed_positions", [])[-recent_window:]
     recent_losses = [row for row in recent_closed if float(row.get("pnl", 0.0) or 0.0) <= 0]
     stop_losses = [row for row in recent_closed if row.get("close_reason") == "stop_loss"]
     drift_conflicts = [row for row in recent_blocked if "drift conflict" in str(row.get("reason", ""))]
+    replay_missed_wins = [row for row in recent_replay_closed if float(row.get("pnl", 0.0) or 0.0) > 0]
+    replay_avoided_losses = [row for row in recent_replay_closed if float(row.get("pnl", 0.0) or 0.0) < 0]
 
     relax_score = 0
     if len(recent_blocked) >= int(adaptive_cfg.get("min_blocked_to_relax", 6) or 6):
         relax_score += 1
     if len(recent_blocked) >= int(adaptive_cfg.get("strong_blocked_to_relax", 10) or 10):
+        relax_score += 1
+    if len(replay_missed_wins) >= int(adaptive_cfg.get("replay_wins_to_relax", 2) or 2):
         relax_score += 1
 
     tighten_score = 0
@@ -63,18 +70,26 @@ def _adaptive_spot_profile(data_dir: Path, cfg: dict) -> dict:
         tighten_score += 1
     if len(stop_losses) >= int(adaptive_cfg.get("stop_losses_to_tighten", 2) or 2):
         tighten_score += 1
+    if len(replay_avoided_losses) >= int(adaptive_cfg.get("replay_losses_to_tighten", 4) or 4):
+        tighten_score += 1
 
     level = relax_score - tighten_score
     profile["recent_blocked"] = len(recent_blocked)
     profile["recent_losses"] = len(recent_losses)
     profile["recent_closed"] = len(recent_closed)
+    profile["recent_replay_closed"] = len(recent_replay_closed)
+    profile["recent_missed_wins"] = len(replay_missed_wins)
+    profile["recent_avoided_losses"] = len(replay_avoided_losses)
     profile["level"] = level
 
     effective_guard = copy.deepcopy(base_guard)
     effective_override = copy.deepcopy(base_override)
     if level > 0:
         profile["mode"] = "more_active"
-        profile["reasons"].append(f"relaxed after {len(recent_blocked)} blocked spot setups")
+        if len(replay_missed_wins) >= int(adaptive_cfg.get("replay_wins_to_relax", 2) or 2):
+            profile["reasons"].append(f"relaxed because {len(replay_missed_wins)} blocked setups would have won")
+        else:
+            profile["reasons"].append(f"relaxed after {len(recent_blocked)} blocked spot setups")
         effective_guard["min_momentum_score"] = round(
             _clamp(float(base_guard.get("min_momentum_score", 0.25)) - (0.06 * level), 0.10, 0.60), 4
         )
@@ -95,7 +110,10 @@ def _adaptive_spot_profile(data_dir: Path, cfg: dict) -> dict:
             profile["reasons"].append("temporarily ignoring drift-alignment conflicts")
     elif level < 0:
         profile["mode"] = "more_cautious"
-        profile["reasons"].append(f"tightened after {len(recent_losses)} recent losing closes")
+        if len(replay_avoided_losses) >= int(adaptive_cfg.get("replay_losses_to_tighten", 4) or 4):
+            profile["reasons"].append(f"tightened because {len(replay_avoided_losses)} blocked setups would have lost")
+        else:
+            profile["reasons"].append(f"tightened after {len(recent_losses)} recent losing closes")
         tighten = abs(level)
         effective_guard["min_momentum_score"] = round(
             _clamp(float(base_guard.get("min_momentum_score", 0.25)) + (0.05 * tighten), 0.10, 0.80), 4
@@ -217,11 +235,20 @@ def process_once(root: Path, cfg: dict) -> int:
     analyses = {}
     signal_count = 0
     blocked_spot_rows = []
+    blocked_replay_opens = []
     latest_setups = []
 
     for snapshot in markets:
         blocked_reason = _spot_guardrail(snapshot, effective_cfg)
+        analysis = None
+        if snapshot.market_type == "crypto_spot":
+            analysis = analyzer.analyze(snapshot)
+            analyses[snapshot.market_id] = analysis
         if blocked_reason:
+            if analysis:
+                shadow = register_blocked_replay(data_dir, snapshot, analysis, blocked_reason, effective_cfg)
+                if shadow:
+                    blocked_replay_opens.append(shadow)
             blocked_row = {
                 "ts": datetime.now(timezone.utc).isoformat(),
                 "market_id": snapshot.market_id,
@@ -237,18 +264,25 @@ def process_once(root: Path, cfg: dict) -> int:
                 "price_change_24h_pct": snapshot.extra.get("price_change_24h_pct", ""),
                 "setup_score": snapshot.extra.get("setup_score", ""),
                 "momentum_score": snapshot.extra.get("momentum_score", ""),
+                "shadow_recommendation": analysis.recommendation if analysis else "",
+                "shadow_confidence": round(analysis.confidence, 4) if analysis else "",
+                "shadow_edge": round(analysis.edge, 4) if analysis else "",
             }
             blocked_spot_rows.append(blocked_row)
             latest_setups.append(
                 {
                     "market": snapshot.question,
                     "symbol": snapshot.market_id,
-                    "recommendation": "BLOCKED",
+                    "recommendation": (
+                        f"BLOCKED {analysis.recommendation}"
+                        if analysis and analysis.recommendation != "HOLD"
+                        else "BLOCKED"
+                    ),
                     "reason": blocked_reason,
                     "setup_score": snapshot.extra.get("setup_score", ""),
                     "momentum_score": snapshot.extra.get("momentum_score", ""),
-                    "confidence": "",
-                    "edge": "",
+                    "confidence": round(analysis.confidence, 4) if analysis else "",
+                    "edge": round(analysis.edge, 4) if analysis else "",
                 }
             )
             append_csv(
@@ -269,11 +303,15 @@ def process_once(root: Path, cfg: dict) -> int:
                     "price_change_24h_pct",
                     "setup_score",
                     "momentum_score",
+                    "shadow_recommendation",
+                    "shadow_confidence",
+                    "shadow_edge",
                 ],
             )
             continue
-        analysis = analyzer.analyze(snapshot)
-        analyses[snapshot.market_id] = analysis
+        if not analysis:
+            analysis = analyzer.analyze(snapshot)
+            analyses[snapshot.market_id] = analysis
         signal_row = {
             "market_id": snapshot.market_id,
             "market_type": snapshot.market_type,
@@ -398,6 +436,32 @@ def process_once(root: Path, cfg: dict) -> int:
             f"PnL: {closed['pnl']:.2f}"
         )
 
+    replay_closed = reconcile_replay_positions(data_dir, snapshot_by_id, analyses, effective_cfg)
+    for closed in replay_closed:
+        append_csv(
+            data_dir / "replay_closures.csv",
+            closed,
+            [
+                "market_id",
+                "question",
+                "market_type",
+                "side",
+                "entry_price",
+                "exit_price",
+                "size",
+                "notional",
+                "pnl",
+                "opened_at",
+                "closed_at",
+                "close_reason",
+                "blocked_reason",
+                "recommendation",
+                "confidence",
+                "edge",
+                "outcome",
+            ],
+        )
+
     closed_market_ids = {row["market_id"] for row in closed_positions}
     for snapshot in markets:
         if snapshot.market_id in closed_market_ids:
@@ -458,6 +522,10 @@ def process_once(root: Path, cfg: dict) -> int:
             "rows": latest_setups[:12],
         },
     )
+    replay = replay_summary(
+        data_dir,
+        recent_window=int(effective_cfg.get("execution", {}).get("adaptive_spot", {}).get("recent_window", 12) or 12),
+    )
     updated_profile = _adaptive_spot_profile(data_dir, effective_cfg)
     payload = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -465,6 +533,10 @@ def process_once(root: Path, cfg: dict) -> int:
         "markets_scanned": len(markets),
         "signals_emitted": signal_count,
         "blocked_spot_markets": len(blocked_spot_rows),
+        "blocked_replay_opened": len(blocked_replay_opens),
+        "replay_open_positions": replay["open_count"],
+        "replay_closed_trades": replay["closed_count"],
+        "recent_missed_wins": replay["recent_missed_wins"],
         "adaptive_mode": updated_profile["mode"],
         "adaptive_level": updated_profile["level"],
     }
@@ -524,6 +596,7 @@ def format_status(root: Path, cfg: dict) -> str:
         data_dir / "adaptive_profile.json",
         {"mode": "neutral", "level": 0, "recent_blocked": 0, "recent_losses": 0},
     )
+    replay = replay_summary(data_dir)
     payload = {
         "paused": control["paused"],
         "reason": control["reason"],
@@ -532,6 +605,8 @@ def format_status(root: Path, cfg: dict) -> str:
         "positions": len(broker.state["positions"]),
         "adaptive_mode": adaptive["mode"],
         "adaptive_level": adaptive["level"],
+        "replay_open_positions": replay["open_count"],
+        "replay_closed_trades": replay["closed_count"],
     }
     return json.dumps(payload, indent=2)
 
@@ -545,6 +620,7 @@ def format_report(root: Path, cfg: dict) -> str:
     signals = _load_json_rows(data_dir / "signals.csv")
     orders = _load_json_rows(data_dir / "orders.csv")
     performance = _report_performance(root, cfg)
+    replay = replay_summary(data_dir)
     adaptive = load_json(
         data_dir / "adaptive_profile.json",
         {"mode": "neutral", "level": 0, "recent_blocked": 0, "recent_losses": 0, "reasons": []},
@@ -571,6 +647,9 @@ def format_report(root: Path, cfg: dict) -> str:
         f"Average PnL: {performance['average_pnl']:.2f}",
         f"Adaptive mode: {adaptive['mode']} (level {adaptive['level']})",
         f"Macro mode: {macro.get('mode', 'neutral')} (score {macro.get('combined_score', 0.0):+.2f})",
+        f"Replay closed trades: {replay['closed_count']}",
+        f"Replay win rate: {replay['win_rate'] * 100:.0f}%",
+        f"Replay average PnL: {replay['average_pnl']:.2f}",
         f"Recent blocked setups: {adaptive.get('recent_blocked', 0)}",
         f"Recent losing closes: {adaptive.get('recent_losses', 0)}",
     ]
@@ -578,6 +657,11 @@ def format_report(root: Path, cfg: dict) -> str:
         lines.append(f"Adaptive note: {adaptive['reasons'][0]}")
     if macro.get("notes"):
         lines.append(f"Macro note: {macro['notes'][0]}")
+    if replay.get("recent_missed_wins") or replay.get("recent_avoided_losses"):
+        lines.append(
+            f"Replay note: {replay.get('recent_missed_wins', 0)} missed wins, "
+            f"{replay.get('recent_avoided_losses', 0)} avoided losses in recent window"
+        )
     if latest_signal:
         lines.extend(
             [

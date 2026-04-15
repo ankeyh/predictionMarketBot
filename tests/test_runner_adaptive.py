@@ -117,6 +117,58 @@ def test_adaptive_spot_profile_tightens_after_losses(tmp_path: Path):
     assert profile["effective_override"]["min_edge"] > 0.03
 
 
+def test_adaptive_spot_profile_relaxes_after_missed_replay_wins(tmp_path: Path):
+    cfg = {
+        "execution": {
+            "adaptive_spot": {
+                "enabled": True,
+                "recent_window": 12,
+                "min_blocked_to_relax": 99,
+                "strong_blocked_to_relax": 199,
+                "replay_wins_to_relax": 2,
+                "replay_losses_to_tighten": 4,
+                "losses_to_tighten": 99,
+                "stop_losses_to_tighten": 99,
+            },
+            "spot_guardrail": {
+                "enabled": True,
+                "min_momentum_score": 0.25,
+                "min_change_1h_pct": 0.0005,
+                "min_realized_vol_1h": 0.0007,
+                "max_realized_vol_1h": 0.03,
+                "require_drift_alignment": True,
+            },
+        },
+        "venue": {
+            "paper_overrides": {
+                "crypto_spot": {"min_edge": 0.03, "min_confidence": 0.30}
+            }
+        },
+    }
+    save_json(
+        tmp_path / "state.json",
+        {
+            "closed_positions": [],
+        },
+    )
+    save_json(
+        tmp_path / "replay_state.json",
+        {
+            "open_positions": [],
+            "closed_positions": [
+                {"pnl": 1.2, "close_reason": "take_profit"},
+                {"pnl": 0.8, "close_reason": "opposite_signal"},
+            ],
+        },
+    )
+
+    profile = _adaptive_spot_profile(tmp_path, cfg)
+
+    assert profile["mode"] == "more_active"
+    assert profile["recent_missed_wins"] == 2
+    assert "would have won" in profile["reasons"][0]
+
+
 def test_spot_guardrail_is_looser_for_bearish_setups():
     cfg = {
         "execution": {

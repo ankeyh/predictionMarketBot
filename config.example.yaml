@@ -104,6 +104,8 @@ execution:
     recent_window: 12
     min_blocked_to_relax: 4
     strong_blocked_to_relax: 8
+    replay_wins_to_relax: 2
+    replay_losses_to_tighten: 4
     losses_to_tighten: 2
     stop_losses_to_tighten: 2
   spot_guardrail:

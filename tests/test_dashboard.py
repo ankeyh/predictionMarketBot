@@ -132,9 +132,30 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
             "recent_blocked": 8,
             "recent_losses": 0,
             "recent_closed": 1,
+            "recent_replay_closed": 1,
+            "recent_missed_wins": 1,
+            "recent_avoided_losses": 0,
             "reasons": ["relaxed after 8 blocked spot setups"],
             "effective_guardrail": {"min_momentum_score": 0.19},
             "effective_override": {"min_edge": 0.022, "min_confidence": 0.26},
+        },
+    )
+    save_json(
+        data_dir / "replay_state.json",
+        {
+            "open_positions": [],
+            "closed_positions": [
+                {
+                    "market_id": "m1",
+                    "question": "Missouri St. at Texas Winner?",
+                    "side": "BUY",
+                    "close_reason": "take_profit",
+                    "blocked_reason": "volatility too low",
+                    "pnl": 3.25,
+                    "closed_at": "2026-03-20T18:00:00+00:00",
+                }
+            ],
+            "last_closed_at": "2026-03-20T18:00:00+00:00",
         },
     )
     append_csv(
@@ -189,6 +210,8 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
     assert summary["recent_settlements"][0]["reason"] == "Settled Yes"
     assert summary["performance"]["closed_count"] == 1
     assert summary["performance"]["win_rate"] == 1.0
+    assert summary["replay_performance"]["closed_count"] == 1
+    assert summary["replay"]["recent_missed_wins"] == 1
     assert summary["status"]["last_successful_scan"] == "2026-03-20 18:05 UTC"
     assert summary["status"]["last_scan_markets"] == 4
     assert summary["status"]["last_scan_blocked"] == 2
@@ -196,6 +219,7 @@ def test_dashboard_summary_reads_bot_files(tmp_path: Path):
     assert summary["adaptive"]["effective_override"]["min_edge"] == 0.022
     assert summary["recent_blocked_spot"][0]["market"] == "Will XRP-USD be higher over the next 2 hours?"
     assert summary["recent_blocked_spot"][0]["reason"] == "Volatility Too Low"
+    assert summary["recent_replay_closures"][0]["outcome"] == "Missed Win"
 
 
 def test_dashboard_html_contains_heading():

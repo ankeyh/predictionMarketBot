@@ -155,6 +155,15 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             "effective_override": {},
         },
     )
+    replay_state = load_json(
+        data_dir / "replay_state.json",
+        {
+            "open_positions": [],
+            "closed_positions": [],
+            "last_opened_at": {},
+            "last_closed_at": "",
+        },
+    )
     macro = load_json(
         data_dir / "macro_snapshot.json",
         {
@@ -184,6 +193,8 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
     recommendation_counts: dict[str, int] = {}
     closed_positions = state.get("closed_positions", [])
     performance = _performance_summary(closed_positions)
+    replay_closed_positions = replay_state.get("closed_positions", [])
+    replay_performance = _performance_summary(replay_closed_positions)
     for row in signals:
         recommendation = row.get("recommendation", "UNKNOWN") or "UNKNOWN"
         recommendation_counts[recommendation] = recommendation_counts.get(recommendation, 0) + 1
@@ -265,6 +276,28 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             }
         )
 
+    recent_replay_closures = []
+    for closed in reversed(replay_closed_positions[-10:]):
+        market_id = closed.get("market_id", "")
+        market_label = (
+            closed.get("question")
+            or market_labels.get(market_id)
+            or _format_market_id(market_id)
+        )
+        replay_pnl = _to_float(closed.get("pnl", 0.0))
+        outcome = closed.get("outcome") or ("missed_win" if replay_pnl > 0 else "avoided_loss" if replay_pnl < 0 else "flat")
+        recent_replay_closures.append(
+            {
+                "market": market_label,
+                "side": closed.get("side", ""),
+                "reason": _format_status(closed.get("close_reason", "")),
+                "blocked_reason": _format_status(closed.get("blocked_reason", "")),
+                "outcome": _format_status(outcome),
+                "pnl": _format_pnl(replay_pnl),
+                "closed_at": _format_ts(closed.get("closed_at", "")),
+            }
+        )
+
     recent_orders = []
     for order in reversed(orders[-10:]):
         market_id = order.get("market_id", "")
@@ -315,6 +348,7 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             "last_successful_scan": _format_ts(last_scan.get("ts", "")),
             "last_scan_markets": last_scan.get("markets_scanned", 0),
             "last_scan_blocked": last_scan.get("blocked_spot_markets", 0),
+            "last_scan_replay_opened": last_scan.get("blocked_replay_opened", 0),
             "adaptive_mode": adaptive.get("mode", "neutral"),
             "adaptive_level": adaptive.get("level", 0),
             "macro_mode": macro.get("mode", "neutral"),
@@ -324,13 +358,16 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
             "signals": len(signals),
             "orders": len(orders),
             "closed_positions": len(closed_positions),
+            "replay_closed_positions": len(replay_closed_positions),
             "recommendations": recommendation_counts,
         },
         "charts": {
             "recent_signals": recent_signal_chart,
             "close_reasons": performance["close_reasons"],
+            "replay_close_reasons": replay_performance["close_reasons"],
         },
         "performance": performance,
+        "replay_performance": replay_performance,
         "latest_signal": signals[-1] if signals else None,
         "latest_spot_signal": latest_spot_signal,
         "latest_order": latest_order,
@@ -338,9 +375,17 @@ def build_dashboard_summary(root: Path, cfg: dict) -> dict[str, Any]:
         "recent_orders": recent_orders,
         "open_positions": open_positions,
         "recent_settlements": recent_settlements,
+        "recent_replay_closures": recent_replay_closures,
         "recent_blocked_spot": recent_blocked_spot,
         "top_setups": latest_setups.get("rows", []),
         "adaptive": adaptive,
+        "replay": {
+            "open_count": len(replay_state.get("open_positions", [])),
+            "closed_count": len(replay_closed_positions),
+            "recent_missed_wins": sum(1 for row in replay_closed_positions[-12:] if _to_float(row.get("pnl", 0.0)) > 0),
+            "recent_avoided_losses": sum(1 for row in replay_closed_positions[-12:] if _to_float(row.get("pnl", 0.0)) < 0),
+            "last_closed_at": _format_ts(replay_state.get("last_closed_at", "")),
+        },
         "macro": macro,
         "discord": {
             "channel_url": os.getenv("DISCORD_CHANNEL_URL", ""),
@@ -482,7 +527,9 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
     latest_spot_signal = summary.get("latest_spot_signal") or {}
     latest_order = summary["latest_order"] or {}
     performance = summary["performance"]
+    replay_performance = summary.get("replay_performance", {})
     adaptive = summary.get("adaptive", {})
+    replay = summary.get("replay", {})
     macro = summary.get("macro", {})
     paused_tone = "danger" if status["paused"] else "success"
     paused_text = "Paused" if status["paused"] else "Running"
@@ -836,6 +883,7 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
       {_card("Orders logged", str(summary["counts"]["orders"]))}
       {_card("Open positions", str(status["positions"]), "warn" if status["positions"] else "")}
       {_card("Closed bets", str(summary["counts"]["closed_positions"]), "neutral")}
+      {_card("Replay closes", str(summary["counts"].get("replay_closed_positions", 0)), "neutral")}
       {_card("Last successful scan", str(status["last_successful_scan"] or "No scan yet"), "neutral")}
       {_card("Adaptive mode", f"{status['adaptive_mode']} ({status['adaptive_level']:+d})", "neutral")}
       {_card("Candle setup score", str((latest_spot_signal.get("setup_score") if latest_spot_signal else "n/a") or "n/a"), "neutral")}
@@ -930,11 +978,26 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
             <div>Recent blocked setups: {html.escape(str(adaptive.get("recent_blocked", 0)))}</div>
             <div>Recent losing closes: {html.escape(str(adaptive.get("recent_losses", 0)))}</div>
             <div>Recent closed trades: {html.escape(str(adaptive.get("recent_closed", 0)))}</div>
+            <div>Recent replay closes: {html.escape(str(adaptive.get("recent_replay_closed", 0)))}</div>
+            <div>Recent missed wins: {html.escape(str(adaptive.get("recent_missed_wins", 0)))}</div>
+            <div>Recent avoided losses: {html.escape(str(adaptive.get("recent_avoided_losses", 0)))}</div>
             <div>Effective min edge: {html.escape(str(adaptive.get("effective_override", {}).get("min_edge", "n/a")))}</div>
             <div>Effective min confidence: {html.escape(str(adaptive.get("effective_override", {}).get("min_confidence", "n/a")))}</div>
             <div>Effective momentum floor: {html.escape(str(adaptive.get("effective_guardrail", {}).get("min_momentum_score", "n/a")))}</div>
           </div>
           <div class="reasoning">{html.escape(str((adaptive.get("reasons") or ["No adaptive changes yet."])[0]))}</div>
+        </section>
+
+        <section class="panel">
+          <h2>Missed-trade replay</h2>
+          <div class="meta">
+            <div>Open replay positions: {html.escape(str(replay.get("open_count", 0)))}</div>
+            <div>Closed replay trades: {html.escape(str(replay.get("closed_count", 0)))}</div>
+            <div>Recent missed wins: {html.escape(str(replay.get("recent_missed_wins", 0)))}</div>
+            <div>Recent avoided losses: {html.escape(str(replay.get("recent_avoided_losses", 0)))}</div>
+            <div>Last replay close: {html.escape(str(replay.get("last_closed_at", "n/a") or "n/a"))}</div>
+          </div>
+          <div class="reasoning">The bot tracks blocked spot setups as shadow trades and scores whether skipping them helped or hurt. This is the evidence loop used to relax or tighten the guardrail.</div>
         </section>
 
         <section class="panel">
@@ -980,6 +1043,18 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
         </section>
 
         <section class="panel">
+          <h2>Replay performance</h2>
+          <div class="kpis">
+            {_card("Replay win rate", f"{replay_performance.get('win_rate', 0.0) * 100:.0f}%")}
+            {_card("Replay avg PnL", _format_pnl(replay_performance.get("average_pnl", 0.0)))}
+            {_card("Replay best / worst", f"{_format_pnl(replay_performance.get('best_pnl', 0.0))} / {_format_pnl(replay_performance.get('worst_pnl', 0.0))}")}
+          </div>
+          <div class="meta" style="margin-top: 14px;">
+            <div>Closed replay trades: {replay_performance.get('closed_count', 0)}</div>
+          </div>
+        </section>
+
+        <section class="panel">
           <h2>Recommendation mix</h2>
           {_render_recommendation_chart(recommendation_counts)}
         </section>
@@ -1009,6 +1084,11 @@ def render_dashboard_html(summary: dict[str, Any]) -> str:
         <section class="panel">
           <h2>Recent closes</h2>
           {_render_rows(summary["recent_settlements"], [("market", "Market"), ("side", "Side"), ("reason", "Reason"), ("payout", "Payout"), ("pnl", "PnL"), ("settled_at", "Closed")])}
+        </section>
+
+        <section class="panel">
+          <h2>Replay closes</h2>
+          {_render_rows(summary.get("recent_replay_closures", []), [("market", "Market"), ("side", "Side"), ("blocked_reason", "Blocked"), ("reason", "Exit"), ("outcome", "Outcome"), ("pnl", "PnL"), ("closed_at", "Closed")])}
         </section>
 
         <section class="panel">
